@@ -106,7 +106,7 @@ def run_app():
                                 status = "✅ Healthy" if result["disease"] == "Healthy" else "️ Diseased"
                                 st.markdown(f"### {status}: `{result['disease']}`")
                                 st.metric("Confidence", f"{result['confidence']:.1%}")
-                                st.progress(result["confidence"])
+                                st.progress(float(result["confidence"]))
                                 
                                 if not result["passes_threshold"]:
                                     st.warning("Confidence below threshold. Review manually.")
@@ -141,7 +141,7 @@ def run_app():
             st.write("**📈 Real-time Analytics**")
             progress_bar = st.progress(0, text="Starting training...")
             metrics_text = st.empty()
-            
+        
         # Initialize callback before training
         cb = StreamlitTrainCallback(progress_bar, metrics_text)
         
