@@ -1,27 +1,39 @@
-# Environment
-venv/
-.env
-*.log
-
+```
 # Python
 __pycache__/
 *.pyc
-*.egg-info/
-dist/
-build/
+*.pyo
+*.pyd
 
-# Models & Data (keep structure, ignore large files)
-models/final/*.keras
-models/tflite/*.tflite
-data/raw/
-!data/raw/.gitkeep
-data/splits/
+# Logs and temp files
+*.log
+*.tmp
 
-# IDE & OS
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editors
 .vscode/
 .idea/
-.DS_Store
-Thumbs.db
 
-# Streamlit
-.streamlit/
+# Dependencies
+.venv/
+venv/
+node_modules/
+
+# Build artifacts
+dist/
+build/
+target/
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+```
