@@ -174,22 +174,20 @@ def run_app():
                         st.session_state.training_active = False
                         progress_bar.empty()        
 
-        # 📊 Learning Curves (Post-Training)
-        # 📊 Post-Training Learning Curves (Safe rendering)
-    if "train_history" in st.session_state and st.session_state.train_history["epoch"]:
-        st.divider()
-        st.subheader("📊 Final Learning Curves")
-        plot_learning_curves(st.session_state.train_history)  # Your existing Plotly function
+            # 📊 Learning Curves (Post-Training)
+            # 📊 Post-Training Learning Curves (Safe rendering)
+            if "train_history" in st.session_state and st.session_state.train_history["epoch"]:
+                st.divider()
+                st.subheader("📊 Final Learning Curves")
+                plot_learning_curves(st.session_state.train_history)  # Your existing Plotly function
 
-    # ... [keep footer stats] ...
-
-    # ================= FOOTER =================
-    st.divider()
-    st.subheader("📊 Session Statistics")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Leaves Scanned", "12", "+2")
-    c2.metric("Diseases Found", "3", "-1")
-    c3.metric("Healthy Rate", "75%")
+            # ================= FOOTER =================
+            st.divider()
+            st.subheader("📊 Session Statistics")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Leaves Scanned", "12", "+2")
+            c2.metric("Diseases Found", "3", "-1")
+            c3.metric("Healthy Rate", "75%")
 
 if __name__ == "__main__":
     run_app()
