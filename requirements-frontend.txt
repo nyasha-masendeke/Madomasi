@@ -1,0 +1,9 @@
+# UI Framework
+streamlit>=1.30.0
+
+# Visualization
+plotly>=5.18.0          # BETTER for live learning curves in Streamlit
+pillow>=10.0.0
+
+# Data Management
+pandas>=2.0.0

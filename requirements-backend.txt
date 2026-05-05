@@ -1,0 +1,9 @@
+# Machine Learning
+tensorflow>=2.15.0      # Standard version now includes ARM64 wheels for Pi 5
+keras>=2.15.0
+opencv-python-headless  # Headless is lighter and safer for server/Pi environments
+
+# Data & Monitoring
+scikit-learn>=1.3.0
+psutil>=5.9.0           # MANDATORY for hardware resource tracking
+numpy>=1.24.0
