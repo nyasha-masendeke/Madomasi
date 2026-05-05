@@ -1,23 +1,13 @@
 import streamlit as st
 import cv2
-import av
-import psutil
-import platform
-from PIL import Image, ImageDraw
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from PIL import Image
 from config import DISEASE_CLASSES
-import time
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
-from src.utils.training_utils import DashboardCallback, get_sys_stats
 from . import sidebar
 from pipeline import train_model, predict_image
 from streamlit_callback import StreamlitTrainCallback
-import tensorflow as tf
-# =============================================================================
-#  LEARNING CURVES PLOTTER
-# =============================================================================
 def plot_learning_curves(history: dict):
     """Generate interactive learning curves after training completes."""
     df = pd.DataFrame(history)
@@ -69,14 +59,11 @@ def plot_learning_curves(history: dict):
     
     st.plotly_chart(fig, use_container_width=True, key="learning_curves")
 
-# =============================================================================
-# 🔹 MAIN APP ENTRY (Focus on Training Dashboard Integration)
-# =============================================================================
+
 def run_app():
     params = sidebar.render_sidebar()
     st.title("🍅 Tomato AI Diagnostics")
     st.markdown("---")
-    #render_resource_monitor()
     
     tab_inference, tab_training = st.tabs(["🔍 Inference", "📊 Training Dashboard"])
     
@@ -174,20 +161,11 @@ def run_app():
                         st.session_state.training_active = False
                         progress_bar.empty()        
 
-            # 📊 Learning Curves (Post-Training)
             # 📊 Post-Training Learning Curves (Safe rendering)
             if "train_history" in st.session_state and st.session_state.train_history["epoch"]:
                 st.divider()
                 st.subheader("📊 Final Learning Curves")
-                plot_learning_curves(st.session_state.train_history)  # Your existing Plotly function
-
-            # ================= FOOTER =================
-            st.divider()
-            st.subheader("📊 Session Statistics")
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Leaves Scanned", "12", "+2")
-            c2.metric("Diseases Found", "3", "-1")
-            c3.metric("Healthy Rate", "75%")
+                plot_learning_curves(st.session_state.train_history)
 
 if __name__ == "__main__":
     run_app()
