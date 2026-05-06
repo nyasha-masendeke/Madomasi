@@ -11,11 +11,16 @@ dist/
 build/
 
 # Models & Data (keep structure, ignore large files)
-models/final/*.keras
-models/tflite/*.tflite
+models/**/*.keras
+models/**/*.tflite
+models/**/*.h5
 data/raw/
 !data/raw/.gitkeep
 data/splits/
+
+# Outputs
+outputs/*.html
+outputs/*.png
 
 # IDE & OS
 .vscode/
