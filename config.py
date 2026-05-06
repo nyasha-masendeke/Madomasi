@@ -15,7 +15,7 @@ DISEASE_CLASSES = [
 
 CSS_MODULES = {
     "base": """
-        .stApp { background-color: ##46499e; }
+        .stApp { background-color: #46499e; }
         [data-testid="stHeader"] { background: rgba(1,04,90,0); }
     """,
     "sidebar": """
