@@ -5,11 +5,14 @@ from plotly.subplots import make_subplots
 
 
 class StreamlitTrainCallback(tf.keras.callbacks.Callback):
-    def __init__(self, progress_bar, metrics_placeholder, chart_placeholder):
+    def __init__(self, progress_bar, metrics_placeholder, chart_placeholder,
+                 stage_label: str = "", epoch_offset: int = 0):
         super().__init__()
         self.progress = progress_bar
         self.metrics = metrics_placeholder
         self.chart = chart_placeholder
+        self.stage_label = stage_label
+        self.epoch_offset = epoch_offset   # shift epoch numbers so stages display continuously
         self.history = {
             "epoch": [], "accuracy": [], "val_accuracy": [], "loss": [], "val_loss": []
         }
@@ -17,16 +20,18 @@ class StreamlitTrainCallback(tf.keras.callbacks.Callback):
     def on_epoch_end(self, epoch, logs=None):
         logs = logs or {}
         total = self.params.get("epochs", 1)
+        display_epoch = epoch + 1 + self.epoch_offset
 
-        # Record metrics
-        self.history["epoch"].append(epoch + 1)
+        # Record metrics using display epoch so stages are continuous on the chart
+        self.history["epoch"].append(display_epoch)
         for key in ("accuracy", "val_accuracy", "loss", "val_loss"):
             self.history[key].append(logs.get(key))
 
         # Progress bar
+        prefix = f"[{self.stage_label}] " if self.stage_label else ""
         self.progress.progress(
             (epoch + 1) / total,
-            text=f"Epoch {epoch + 1} / {total}"
+            text=f"{prefix}Epoch {epoch + 1} / {total}"
         )
 
         # Metric summary row

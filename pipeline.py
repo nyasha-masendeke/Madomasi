@@ -131,7 +131,11 @@ def train_two_stage(
     fe_path = run_dir / "stage1_fe.keras"
     ft_path = run_dir / "stage2_ft.keras"
 
-    early_stop = tf.keras.callbacks.EarlyStopping(
+    # Each stage gets its own EarlyStopping instance — they must not share state
+    early_stop_fe = tf.keras.callbacks.EarlyStopping(
+        monitor="val_loss", patience=3, restore_best_weights=True, verbose=0
+    )
+    early_stop_ft = tf.keras.callbacks.EarlyStopping(
         monitor="val_loss", patience=3, restore_best_weights=True, verbose=0
     )
 
@@ -150,7 +154,7 @@ def train_two_stage(
             tf.keras.callbacks.ModelCheckpoint(
                 str(fe_path), monitor="val_accuracy", save_best_only=True, mode="max", verbose=0
             ),
-            early_stop,
+            early_stop_fe,
         ],
         verbose=0,
     )
@@ -172,7 +176,7 @@ def train_two_stage(
             tf.keras.callbacks.ModelCheckpoint(
                 str(ft_path), monitor="val_accuracy", save_best_only=True, mode="max", verbose=0
             ),
-            early_stop,
+            early_stop_ft,
         ],
         verbose=0,
     )
@@ -188,8 +192,8 @@ def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5
     model = tf.keras.models.load_model(model_path)
 
     img = Image.open(image_data).resize(IMAGE_SIZE).convert("RGB")
+    # Raw [0, 255] float32 — preprocess_input is baked into the model graph (build_model)
     arr = np.expand_dims(np.array(img, dtype=np.float32), axis=0)
-    arr = tf.keras.applications.mobilenet_v3.preprocess_input(arr)
 
     preds = model.predict(arr, verbose=0)[0]
     class_idx = int(np.argmax(preds))

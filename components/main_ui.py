@@ -49,8 +49,8 @@ class FramePredictor:
     def _infer(self, bgr: np.ndarray) -> dict:
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         resized = cv2.resize(rgb, (224, 224))
+        # Raw [0, 255] — preprocess_input is baked into the model graph
         arr = np.expand_dims(np.array(resized, dtype=np.float32), axis=0)
-        arr = tf.keras.applications.mobilenet_v3.preprocess_input(arr)
         preds = self._model.predict(arr, verbose=0)[0]
         idx = int(np.argmax(preds))
         conf = float(preds[idx])
@@ -378,6 +378,8 @@ def run_app():
                 if run_btn and uploaded:
                     with st.spinner("Analysing leaf..."):
                         try:
+                            # Use cached model — avoids reloading from disk on every click
+                            load_cached_model(model_path)
                             result = predict_image(
                                 model_path, uploaded, confidence / 100
                             )
@@ -584,7 +586,18 @@ def run_app():
             progress_bar = st.progress(0, text="Initialising...")
             metrics_placeholder = st.empty()
             chart_placeholder = st.empty()
-            cb = StreamlitTrainCallback(progress_bar, metrics_placeholder, chart_placeholder)
+            # Separate callback instances per stage so history and progress
+            # bar don't bleed between stages
+            cb_fe = StreamlitTrainCallback(
+                progress_bar, metrics_placeholder, chart_placeholder,
+                stage_label="Stage 1 — Feature Extraction",
+                epoch_offset=0,
+            )
+            cb_ft = StreamlitTrainCallback(
+                progress_bar, metrics_placeholder, chart_placeholder,
+                stage_label="Stage 2 — Fine-Tuning",
+                epoch_offset=fe_epochs,  # continue epoch numbers after Stage 1
+            )
 
             with st.spinner("Training in progress..."):
                 try:
@@ -596,12 +609,21 @@ def run_app():
                             ft_lr=ft_lr,
                             data_dir=data_dir,
                             output_path=model_save_path,
-                            fe_callbacks=[cb],
-                            ft_callbacks=[cb],
+                            fe_callbacks=[cb_fe],
+                            ft_callbacks=[cb_ft],
                         )
                         st.session_state.last_stage1_path = result["stage1_path"]
                         st.session_state.last_stage2_path = result["stage2_path"]
+                        # Merge both stage histories into one continuous record
+                        combined = {}
+                        for key in cb_fe.history:
+                            combined[key] = cb_fe.history[key] + cb_ft.history[key]
+                        st.session_state.train_history = combined
                     else:
+                        cb = StreamlitTrainCallback(
+                            progress_bar, metrics_placeholder, chart_placeholder,
+                            stage_label="Training",
+                        )
                         _, saved_path = train_model(
                             epochs=fe_epochs,
                             lr=fe_lr,
@@ -612,9 +634,9 @@ def run_app():
                         )
                         st.session_state.last_stage1_path = None
                         st.session_state.last_stage2_path = saved_path
+                        st.session_state.train_history = cb.history
 
-                    st.session_state.train_history = cb.history
-                    curves_path = _save_learning_curves(cb.history)
+                    curves_path = _save_learning_curves(st.session_state.train_history)
                     st.success(f"Training complete. Curves saved to `{curves_path}`")
                 except Exception as e:
                     st.error(f"Training failed: {e}")
