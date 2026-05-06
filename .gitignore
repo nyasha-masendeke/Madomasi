@@ -11,6 +11,7 @@ dist/
 build/
 
 # Models & Data (keep structure, ignore large files)
+models/trained/run_*/
 models/**/*.keras
 models/**/*.tflite
 models/**/*.h5
