@@ -211,6 +211,18 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
     border-color: #E63946 !important;
 }
 
+/* ── Radio Buttons ────────────────────────────────────────────────────── */
+[data-testid="stRadio"] label,
+[data-testid="stRadio"] label p,
+[data-testid="stRadio"] div[role="radiogroup"] label span p {
+    color: #16213E !important;
+    font-weight: 500 !important;
+    font-size: 0.9rem !important;
+}
+[data-testid="stRadio"] div[role="radiogroup"] {
+    gap: 12px;
+}
+
 /* ── Alerts ───────────────────────────────────────────────────────────── */
 [data-testid="stAlert"] { border-radius: 10px !important; }
 
