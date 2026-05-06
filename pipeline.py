@@ -67,11 +67,11 @@ def train_model(
         metrics=["accuracy"],
     )
 
-    # Timestamped save path so runs never overwrite each other
+    # One folder per run so single-stage runs match the two-stage layout
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = Path(output_path).parent
-    save_dir.mkdir(parents=True, exist_ok=True)
-    save_path = save_dir / f"run_{ts}_single.keras"
+    run_dir = Path(output_path).parent / f"run_{ts}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    save_path = run_dir / "single_stage.keras"
 
     default_callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
@@ -123,13 +123,13 @@ def train_two_stage(
     train_ds, val_ds = load_datasets(data_dir, batch_size)
     num_classes = len(train_ds.class_names)
 
-    # One timestamp per run — both stages share it so they group together on disk
+    # One folder per run — stages are grouped inside it
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_dir = Path(output_path).parent
-    save_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = Path(output_path).parent / f"run_{ts}"
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    fe_path = save_dir / f"run_{ts}_stage1_fe.keras"
-    ft_path = save_dir / f"run_{ts}_stage2_ft.keras"
+    fe_path = run_dir / "stage1_fe.keras"
+    ft_path = run_dir / "stage2_ft.keras"
 
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor="val_loss", patience=3, restore_best_weights=True, verbose=0
