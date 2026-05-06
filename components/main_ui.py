@@ -13,7 +13,7 @@ from streamlit_webrtc import RTCConfiguration, WebRtcMode, webrtc_streamer
 
 from components import sidebar
 from config import DISEASE_CLASSES
-from pipeline import predict_image, train_model
+from pipeline import predict_image, train_model, train_two_stage
 from src.utils.recommendations import get_recommendation
 from streamlit_callback import StreamlitTrainCallback
 
@@ -318,13 +318,25 @@ def run_app():
 
         with col_cfg:
             st.write("**⚙️ Configuration**")
-            epochs = st.slider("Epochs", 1, 50, 10)
-            lr = st.select_slider(
-                "Learning Rate", options=[0.0001, 0.001, 0.01, 0.1], value=0.001
-            )
-            freeze = st.toggle("Freeze Base Model", value=True)
+            two_stage = st.toggle("Two-Stage Training", value=True,
+                                  help="Stage 1: freeze base (feature extraction). Stage 2: unfreeze base (fine-tuning).")
             data_dir = st.text_input("Dataset Directory", "data/splits/train")
             model_path = st.text_input("Save Path", "models/trained/latest.keras")
+
+            if two_stage:
+                st.caption("Stage 1 — Feature Extraction (frozen base)")
+                fe_epochs = st.slider("Epochs", 1, 50, 10, key="fe_epochs")
+                fe_lr = st.select_slider("Learning Rate", options=[0.0001, 0.001, 0.01, 0.1],
+                                         value=0.001, key="fe_lr")
+                st.caption("Stage 2 — Fine-Tuning (unfrozen base)")
+                ft_epochs = st.slider("Epochs", 1, 50, 10, key="ft_epochs")
+                ft_lr = st.select_slider("Learning Rate", options=[0.00001, 0.0001, 0.001],
+                                         value=0.0001, key="ft_lr")
+            else:
+                fe_epochs = st.slider("Epochs", 1, 50, 10)
+                fe_lr = st.select_slider("Learning Rate", options=[0.0001, 0.001, 0.01, 0.1], value=0.001)
+                freeze = st.toggle("Freeze Base Model", value=True)
+
             btn_train = st.button(
                 "🚀 Start Training", type="primary", use_container_width=True,
                 disabled=st.session_state.get("training_active", False)
@@ -338,6 +350,7 @@ def run_app():
 
         if btn_train:
             st.session_state.training_active = True
+            st.session_state.training_two_stage = two_stage
             st.rerun()
 
         if st.session_state.get("training_active", False):
@@ -347,14 +360,27 @@ def run_app():
             cb = StreamlitTrainCallback(progress_bar, metrics_text, chart_placeholder)
             with st.spinner("🔄 Training in progress..."):
                 try:
-                    train_model(
-                        epochs=epochs,
-                        lr=lr,
-                        freeze_base=freeze,
-                        data_dir=data_dir,
-                        output_path=model_path,
-                        callbacks=[cb],
-                    )
+                    if st.session_state.get("training_two_stage"):
+                        st.info("Stage 1/2: Feature extraction (base frozen)...")
+                        train_two_stage(
+                            fe_epochs=fe_epochs,
+                            fe_lr=fe_lr,
+                            ft_epochs=ft_epochs,
+                            ft_lr=ft_lr,
+                            data_dir=data_dir,
+                            output_path=model_path,
+                            fe_callbacks=[cb],
+                            ft_callbacks=[cb],
+                        )
+                    else:
+                        train_model(
+                            epochs=fe_epochs,
+                            lr=fe_lr,
+                            freeze_base=freeze,
+                            data_dir=data_dir,
+                            output_path=model_path,
+                            callbacks=[cb],
+                        )
                     st.session_state.train_history = cb.history
                     _save_learning_curves(cb.history)
                     st.success("✅ Training Complete!")

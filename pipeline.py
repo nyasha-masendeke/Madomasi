@@ -88,6 +88,75 @@ def train_model(
     return model
 
 
+def train_two_stage(
+    batch_size=16,
+    fe_epochs=10,
+    fe_lr=0.001,
+    ft_epochs=10,
+    ft_lr=0.0001,
+    data_dir="data/splits/train",
+    output_path="models/trained/latest.keras",
+    fe_callbacks=None,
+    ft_callbacks=None,
+):
+    """
+    Two-stage transfer learning pipeline.
+
+    Stage 1 — Feature Extraction:
+      Base model frozen. Only the classification head is trained at a
+      higher learning rate. Fast convergence, establishes a good baseline.
+
+    Stage 2 — Fine-Tuning:
+      Base model unfrozen. The entire network is trained end-to-end at a
+      much lower learning rate to adapt ImageNet features to tomato leaves.
+    """
+    train_ds, val_ds = load_datasets(data_dir, batch_size)
+    num_classes = len(train_ds.class_names)
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+    checkpoint = tf.keras.callbacks.ModelCheckpoint(
+        output_path, monitor="val_accuracy", save_best_only=True, mode="max", verbose=0
+    )
+    early_stop = tf.keras.callbacks.EarlyStopping(
+        monitor="val_loss", patience=3, restore_best_weights=True, verbose=0
+    )
+
+    # ── Stage 1: Feature Extraction ──────────────────────────────────────
+    model = build_model(num_classes, freeze_base=True)
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=fe_lr),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+    model.fit(
+        train_ds,
+        epochs=fe_epochs,
+        validation_data=val_ds,
+        callbacks=(fe_callbacks or []) + [checkpoint, early_stop],
+        verbose=0,
+    )
+
+    # ── Stage 2: Fine-Tuning ─────────────────────────────────────────────
+    # Reload best checkpoint from stage 1 then unfreeze
+    model = tf.keras.models.load_model(output_path)
+    model.layers[1].trainable = True   # base model is layer index 1
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=ft_lr),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+    model.fit(
+        train_ds,
+        epochs=ft_epochs,
+        validation_data=val_ds,
+        callbacks=(ft_callbacks or []) + [checkpoint, early_stop],
+        verbose=0,
+    )
+
+    return model
+
+
 def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5):
     model = tf.keras.models.load_model(model_path)
 
