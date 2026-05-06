@@ -10,19 +10,50 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import tensorflow as tf
-from PIL import Image
 from plotly.subplots import make_subplots
 from streamlit_webrtc import RTCConfiguration, WebRtcMode, webrtc_streamer
 
-from components.system_dashboard import render_dashboard
+from components.system_dashboard import render_dashboard, record_resource_sample
 from config import DISEASE_CLASSES, DISEASE_DISPLAY
-from pipeline import predict_image, train_model, train_two_stage
+from pipeline import (
+    predict_image, train_model, train_two_stage, evaluate_model,
+    extract_features, train_head, fine_tune_model,
+)
 from src.utils.recommendations import get_recommendation
 from streamlit_callback import StreamlitTrainCallback
 
 RTC_CONFIG = RTCConfiguration(
     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
+
+
+def _find_models() -> list:
+    """Return .keras files under models/trained/, newest first."""
+    base = Path("models/trained")
+    if not base.exists():
+        return []
+    return sorted(
+        [str(p) for p in base.rglob("*.keras")],
+        key=lambda p: Path(p).stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _model_picker(label: str, key: str, default: str = "models/trained/latest.keras") -> str:
+    """Selectbox of available models with a custom-path fallback."""
+    available = _find_models()
+    CUSTOM = "Custom path..."
+    if available:
+        choice = st.selectbox(
+            label,
+            options=[CUSTOM] + available,
+            format_func=lambda x: Path(x).name if x != CUSTOM else CUSTOM,
+            key=f"{key}_select",
+        )
+        if choice == CUSTOM:
+            return st.text_input("Custom model path", default, key=f"{key}_custom")
+        return choice
+    return st.text_input(label, default, placeholder="models/trained/run_xxx/stage2_ft.keras", key=key)
 
 
 # =============================================================================
@@ -90,8 +121,8 @@ class FramePredictor:
                 if self._model is not None:
                     try:
                         self._last_result = self._infer(img)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        self._load_error = f"Inference error: {e}"
         if self._load_error:
             cv2.putText(img, f"Model error: {self._load_error[:50]}", (10, 42),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 220), 2, cv2.LINE_AA)
@@ -347,10 +378,7 @@ def run_app():
                     '<div class="section-label">Model & Diagnosis</div>',
                     unsafe_allow_html=True,
                 )
-                model_path = st.text_input(
-                    "Model path", "models/trained/latest.keras",
-                    placeholder="models/trained/run_xxx/stage2_ft.keras",
-                )
+                model_path = _model_picker("Model", key="img_model")
                 st.markdown(_model_status_html(model_path), unsafe_allow_html=True)
                 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
@@ -378,15 +406,25 @@ def run_app():
                 if run_btn and uploaded:
                     with st.spinner("Analysing leaf..."):
                         try:
-                            # Use cached model — avoids reloading from disk on every click
                             load_cached_model(model_path)
                             result = predict_image(
                                 model_path, uploaded, confidence / 100
                             )
+                            record_resource_sample("Inference")
                             _diagnosis_card(result)
                             st.session_state.scans = st.session_state.get("scans", 0) + 1
                             if "healthy" not in result["disease"].lower():
                                 st.session_state.diseases = st.session_state.get("diseases", 0) + 1
+                            # Log to session history
+                            if "diagnosis_log" not in st.session_state:
+                                st.session_state.diagnosis_log = []
+                            st.session_state.diagnosis_log.append({
+                                "Time": datetime.now().strftime("%H:%M:%S"),
+                                "Disease": DISEASE_DISPLAY.get(result["disease"], result["disease"]),
+                                "Confidence": f"{result['confidence']:.1%}",
+                                "Status": "Pass" if result["passes_threshold"] else "Low confidence",
+                                "Model": Path(model_path).name,
+                            })
                             st.rerun()
                         except Exception as e:
                             st.error(f"Prediction failed: {e}")
@@ -406,9 +444,7 @@ def run_app():
                     "If denied, click the camera icon in your address bar → Allow → refresh.",
                     icon="🔒",
                 )
-                model_path_cam = st.text_input(
-                    "Model path", "models/trained/latest.keras", key="cam_model_path"
-                )
+                model_path_cam = _model_picker("Model", key="cam_model")
                 if st.session_state.get("_cam_model_loaded") != model_path_cam:
                     st.session_state.frame_predictor = FramePredictor(
                         model_path_cam, confidence / 100
@@ -462,196 +498,364 @@ def run_app():
                         unsafe_allow_html=True,
                     )
 
+        # ── Diagnosis History ─────────────────────────────────────────
+        if st.session_state.get("diagnosis_log"):
+            st.divider()
+            st.markdown(
+                '<div class="section-label">Session Diagnosis History</div>',
+                unsafe_allow_html=True,
+            )
+            log_df = pd.DataFrame(st.session_state.diagnosis_log[::-1])
+            st.dataframe(log_df, use_container_width=True, hide_index=True)
+            if st.button("Clear history", type="secondary"):
+                st.session_state.diagnosis_log = []
+                st.rerun()
+
     # =========================================================================
-    # TRAINING TAB
+    # TRAINING TAB  — Three-stage Keras transfer-learning pipeline
+    # https://keras.io/guides/transfer_learning/
     # =========================================================================
     with tab_training:
+
+        def _stage_badge(done: bool) -> str:
+            if done:
+                return ('<span style="background:#D1FAE5;color:#065F46;padding:3px 10px;'
+                        'border-radius:20px;font-size:0.75rem;font-weight:600;">Done</span>')
+            return ('<span style="background:#F1F5F9;color:#94A3B8;padding:3px 10px;'
+                    'border-radius:20px;font-size:0.75rem;font-weight:600;">Pending</span>')
+
+        # ── Shared config ─────────────────────────────────────────────────
+        st.markdown('<div class="section-label">Shared Settings</div>', unsafe_allow_html=True)
+        sh1, sh2, sh3 = st.columns(3)
+        data_dir        = sh1.text_input("Dataset directory", "data/splits/train")
+        model_save_base = sh2.text_input("Model output base", "models/trained/latest.keras")
+        batch_size      = sh3.select_slider(
+            "Batch size", options=[4, 8, 16, 32, 64], value=16,
+            help="Larger batches are faster but use more RAM.",
+        )
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
         col_cfg, col_viz = st.columns([2, 3], gap="large")
 
+        # ── Left: three stage cards ───────────────────────────────────────
         with col_cfg:
+
+            # ── Stage 1: Feature Extraction ──────────────────────────────
+            feat_done = bool(st.session_state.get("features_dir"))
             st.markdown(
-                '<div class="section-label">Training Configuration</div>',
+                f"""
+                <div class="stage-header">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div>
+                            <p class="stage-title">Stage 1 — Feature Extraction</p>
+                            <p class="stage-desc">
+                                Run the frozen MobileNetV3Small base over the dataset and cache
+                                the output feature maps to disk.  No weights are updated.
+                            </p>
+                        </div>
+                        {_stage_badge(feat_done)}
+                    </div>
+                </div>
+                """,
                 unsafe_allow_html=True,
             )
-
-            two_stage = st.toggle(
-                "Two-Stage Training",
-                value=True,
-                help="Stage 1: freeze base (feature extraction). Stage 2: unfreeze (fine-tuning).",
-            )
-            data_dir = st.text_input("Dataset directory", "data/splits/train")
-            model_save_path = st.text_input("Save to", "models/trained/latest.keras")
-
-            st.markdown("<div style='height:0.25rem'></div>", unsafe_allow_html=True)
-
-            if two_stage:
-                st.markdown(
-                    """
-                    <div class="stage-header">
-                        <p class="stage-title">Stage 1 — Feature Extraction</p>
-                        <p class="stage-desc">Base frozen &nbsp;·&nbsp; trains classification head only</p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                fe_epochs = st.slider("Epochs", 1, 50, 10, key="fe_epochs")
-                fe_lr = st.select_slider(
-                    "Learning rate", [0.0001, 0.001, 0.01, 0.1], value=0.001, key="fe_lr"
-                )
-
-                st.markdown(
-                    """
-                    <div class="stage-header" style="margin-top:0.75rem;">
-                        <p class="stage-title">Stage 2 — Fine-Tuning</p>
-                        <p class="stage-desc">Base unfrozen &nbsp;·&nbsp; end-to-end training</p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-                ft_epochs = st.slider("Epochs", 1, 50, 10, key="ft_epochs")
-                ft_lr = st.select_slider(
-                    "Learning rate", [0.00001, 0.0001, 0.001], value=0.0001, key="ft_lr"
-                )
-            else:
-                fe_epochs = st.slider("Epochs", 1, 50, 10)
-                fe_lr = st.select_slider(
-                    "Learning rate", [0.0001, 0.001, 0.01, 0.1], value=0.001
-                )
-                freeze = st.toggle("Freeze Base Model", value=True)
-                ft_epochs = ft_lr = None  # not used in single-stage path
-
-            st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-            btn_train = st.button(
-                "Start Training",
-                type="primary",
-                use_container_width=True,
+            feat_out = st.text_input("Features output directory", "data/features", key="feat_out")
+            btn_extract = st.button(
+                "Extract Features", type="primary", use_container_width=True,
                 disabled=st.session_state.get("training_active", False),
+                key="btn_extract",
             )
 
-            # Saved model paths from last run
-            if st.session_state.get("last_stage2_path"):
-                st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-                st.markdown(
-                    '<div class="section-label">Saved Models</div>',
-                    unsafe_allow_html=True,
-                )
-                if st.session_state.get("last_stage1_path"):
-                    st.markdown(
-                        f'<p style="font-size:0.78rem;color:#6B7280;margin:0;">Stage 1</p>'
-                        f'<code style="font-size:0.72rem;">{st.session_state.last_stage1_path}</code>',
-                        unsafe_allow_html=True,
-                    )
-                st.markdown(
-                    f'<p style="font-size:0.78rem;color:#6B7280;margin:4px 0 0 0;">Stage 2 (use for inference)</p>'
-                    f'<code style="font-size:0.72rem;">{st.session_state.last_stage2_path}</code>',
-                    unsafe_allow_html=True,
-                )
+            st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
 
-        with col_viz:
+            # ── Stage 2: Train Head ───────────────────────────────────────
+            head_done = bool(st.session_state.get("head_full_path"))
             st.markdown(
-                '<div class="section-label">Live Training Metrics</div>',
+                f"""
+                <div class="stage-header">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div>
+                            <p class="stage-title">Stage 2 — Train Head</p>
+                            <p class="stage-desc">
+                                Train only the classification head (GAP → Dropout → Dense)
+                                on the cached features.  Base model stays frozen.
+                            </p>
+                        </div>
+                        {_stage_badge(head_done)}
+                    </div>
+                </div>
+                """,
                 unsafe_allow_html=True,
             )
-            progress_bar = st.progress(0, text="Waiting to start...")
+            head_epochs = st.slider("Epochs", 1, 50, 10, key="head_epochs")
+            head_lr     = st.select_slider(
+                "Learning rate", [0.0001, 0.001, 0.01, 0.1], value=0.001, key="head_lr",
+            )
+            btn_head = st.button(
+                "Train Head", type="primary", use_container_width=True,
+                disabled=(not feat_done) or st.session_state.get("training_active", False),
+                key="btn_head",
+            )
+            if not feat_done:
+                st.caption("Run Feature Extraction first to enable this.")
+
+            st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
+
+            # ── Stage 3: Fine-Tuning ──────────────────────────────────────
+            ft_done = bool(st.session_state.get("fine_tuned_path"))
+            st.markdown(
+                f"""
+                <div class="stage-header">
+                    <div style="display:flex;justify-content:space-between;align-items:center;">
+                        <div>
+                            <p class="stage-title">Stage 3 — Fine-Tuning</p>
+                            <p class="stage-desc">
+                                Unfreeze the base model and train the entire network
+                                end-to-end at a very low learning rate.
+                            </p>
+                        </div>
+                        {_stage_badge(ft_done)}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            ft_epochs = st.slider("Epochs", 1, 50, 10, key="ft_epochs")
+            ft_lr     = st.select_slider(
+                "Learning rate", [0.000001, 0.00001, 0.0001], value=0.00001, key="ft_lr",
+            )
+            btn_ft = st.button(
+                "Fine-Tune", type="primary", use_container_width=True,
+                disabled=(not head_done) or st.session_state.get("training_active", False),
+                key="btn_ft",
+            )
+            if not head_done:
+                st.caption("Train the Head first to enable this.")
+
+            # ── Saved paths summary ───────────────────────────────────────
+            any_saved = any([
+                st.session_state.get("features_dir"),
+                st.session_state.get("head_full_path"),
+                st.session_state.get("fine_tuned_path"),
+            ])
+            if any_saved:
+                st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+                st.markdown('<div class="section-label">Saved Artefacts</div>', unsafe_allow_html=True)
+                for label, key in [
+                    ("Features dir",  "features_dir"),
+                    ("Head model",    "head_full_path"),
+                    ("Fine-tuned",    "fine_tuned_path"),
+                ]:
+                    val = st.session_state.get(key)
+                    if val:
+                        st.markdown(
+                            f'<p style="font-size:0.78rem;color:#6B7280;margin:4px 0 0 0;">{label}</p>'
+                            f'<code style="font-size:0.72rem;">{val}</code>',
+                            unsafe_allow_html=True,
+                        )
+
+        # ── Right: live output ────────────────────────────────────────────
+        with col_viz:
+            st.markdown('<div class="section-label">Live Training Output</div>', unsafe_allow_html=True)
+            progress_bar        = st.progress(0, text="Waiting to start...")
             metrics_placeholder = st.empty()
-            chart_placeholder = st.empty()
+            chart_placeholder   = st.empty()
 
             if not st.session_state.get("training_active") and not st.session_state.get("train_history"):
                 chart_placeholder.markdown(
                     """
-                    <div style="
-                        background:white;border-radius:14px;
-                        padding:4rem 2rem;text-align:center;
-                        border:1px solid #EEF0F2;
-                        box-shadow:0 1px 4px rgba(0,0,0,0.06);
-                    ">
+                    <div style="background:white;border-radius:14px;padding:4rem 2rem;
+                                text-align:center;border:1px solid #EEF0F2;
+                                box-shadow:0 1px 4px rgba(0,0,0,0.06);">
                         <div style="font-size:2.5rem;margin-bottom:0.75rem;">📈</div>
                         <div style="font-weight:600;color:#16213E;margin-bottom:0.4rem;">
                             No training data yet
                         </div>
                         <div style="color:#94A3B8;font-size:0.85rem;">
-                            Configure parameters and click Start Training.<br>
-                            Accuracy and loss curves will appear here in real time.
+                            Follow the three stages on the left.<br>
+                            Accuracy and loss curves appear here in real time.
                         </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
                 )
 
-        if btn_train:
+        # ── Stage execution ───────────────────────────────────────────────
+        if btn_extract:
             st.session_state.training_active = True
-            st.session_state.training_two_stage = two_stage
+            st.session_state._active_stage   = "extract"
+            st.session_state._feat_out       = feat_out
+            st.session_state._batch_size     = batch_size
+            st.rerun()
+
+        if btn_head:
+            st.session_state.training_active  = True
+            st.session_state._active_stage    = "head"
+            st.session_state._head_epochs     = head_epochs
+            st.session_state._head_lr         = head_lr
+            st.session_state._model_save_base = model_save_base
+            st.rerun()
+
+        if btn_ft:
+            st.session_state.training_active  = True
+            st.session_state._active_stage    = "finetune"
+            st.session_state._ft_epochs       = ft_epochs
+            st.session_state._ft_lr           = ft_lr
+            st.session_state._batch_size      = batch_size
+            st.session_state._data_dir        = data_dir
             st.rerun()
 
         if st.session_state.get("training_active", False):
-            progress_bar = st.progress(0, text="Initialising...")
-            metrics_placeholder = st.empty()
-            chart_placeholder = st.empty()
-            # Separate callback instances per stage so history and progress
-            # bar don't bleed between stages
-            cb_fe = StreamlitTrainCallback(
-                progress_bar, metrics_placeholder, chart_placeholder,
-                stage_label="Stage 1 — Feature Extraction",
-                epoch_offset=0,
-            )
-            cb_ft = StreamlitTrainCallback(
-                progress_bar, metrics_placeholder, chart_placeholder,
-                stage_label="Stage 2 — Fine-Tuning",
-                epoch_offset=fe_epochs,  # continue epoch numbers after Stage 1
-            )
+            stage = st.session_state.get("_active_stage", "")
+            record_resource_sample("Training")
 
-            with st.spinner("Training in progress..."):
-                try:
-                    if st.session_state.get("training_two_stage"):
-                        result = train_two_stage(
-                            fe_epochs=fe_epochs,
-                            fe_lr=fe_lr,
-                            ft_epochs=ft_epochs,
-                            ft_lr=ft_lr,
-                            data_dir=data_dir,
-                            output_path=model_save_path,
-                            fe_callbacks=[cb_fe],
-                            ft_callbacks=[cb_ft],
+            progress_bar        = st.progress(0, text="Initialising...")
+            metrics_placeholder = st.empty()
+            chart_placeholder   = st.empty()
+
+            try:
+                # ── Extract Features ──────────────────────────────────────
+                if stage == "extract":
+                    def _ext_progress(current, total):
+                        progress_bar.progress(
+                            min(current / max(total, 1), 1.0),
+                            text=f"Extracting batch {current} / {total}",
                         )
-                        st.session_state.last_stage1_path = result["stage1_path"]
-                        st.session_state.last_stage2_path = result["stage2_path"]
-                        # Merge both stage histories into one continuous record
-                        combined = {}
-                        for key in cb_fe.history:
-                            combined[key] = cb_fe.history[key] + cb_ft.history[key]
-                        st.session_state.train_history = combined
-                    else:
-                        cb = StreamlitTrainCallback(
-                            progress_bar, metrics_placeholder, chart_placeholder,
-                            stage_label="Training",
+
+                    with st.spinner("Extracting features from dataset..."):
+                        result = extract_features(
+                            data_dir=st.session_state.get("_feat_out", "data/features"),
+                            output_dir=st.session_state.get("_feat_out", "data/features"),
+                            batch_size=st.session_state.get("_batch_size", 32),
+                            progress_fn=_ext_progress,
                         )
-                        _, saved_path = train_model(
-                            epochs=fe_epochs,
-                            lr=fe_lr,
-                            freeze_base=freeze,
-                            data_dir=data_dir,
-                            output_path=model_save_path,
+                    st.session_state.features_dir = result["features_dir"]
+                    progress_bar.progress(1.0, text="Feature extraction complete")
+                    st.success(
+                        f"Extracted {result['num_samples']} samples · "
+                        f"{result['num_classes']} classes · "
+                        f"feature shape {result['feature_shape']} → `{result['features_dir']}`"
+                    )
+
+                # ── Train Head ────────────────────────────────────────────
+                elif stage == "head":
+                    cb = StreamlitTrainCallback(
+                        progress_bar, metrics_placeholder, chart_placeholder,
+                        stage_label="Train Head",
+                    )
+                    with st.spinner("Training classification head..."):
+                        result = train_head(
+                            features_dir=st.session_state.get("features_dir", "data/features"),
+                            epochs=st.session_state.get("_head_epochs", 10),
+                            lr=st.session_state.get("_head_lr", 0.001),
+                            output_path=st.session_state.get("_model_save_base",
+                                                              "models/trained/latest.keras"),
                             callbacks=[cb],
                         )
-                        st.session_state.last_stage1_path = None
-                        st.session_state.last_stage2_path = saved_path
-                        st.session_state.train_history = cb.history
+                    st.session_state.head_full_path   = result["full_model_path"]
+                    st.session_state.train_history    = cb.history
+                    record_resource_sample("Training")
+                    curves_path = _save_learning_curves(cb.history)
+                    st.success(
+                        f"Head trained · full model → `{result['full_model_path']}`  "
+                        f"· curves → `{curves_path}`"
+                    )
 
-                    curves_path = _save_learning_curves(st.session_state.train_history)
-                    st.success(f"Training complete. Curves saved to `{curves_path}`")
-                except Exception as e:
-                    st.error(f"Training failed: {e}")
-                finally:
-                    st.session_state.training_active = False
-                    st.rerun()
+                # ── Fine-Tune ─────────────────────────────────────────────
+                elif stage == "finetune":
+                    cb = StreamlitTrainCallback(
+                        progress_bar, metrics_placeholder, chart_placeholder,
+                        stage_label="Fine-Tuning",
+                    )
+                    with st.spinner("Fine-tuning full model end-to-end..."):
+                        result = fine_tune_model(
+                            model_path=st.session_state.get("head_full_path", ""),
+                            data_dir=st.session_state.get("_data_dir", "data/splits/train"),
+                            batch_size=st.session_state.get("_batch_size", 16),
+                            epochs=st.session_state.get("_ft_epochs", 10),
+                            lr=st.session_state.get("_ft_lr", 0.00001),
+                            callbacks=[cb],
+                        )
+                    st.session_state.fine_tuned_path = result["path"]
+                    st.session_state.train_history   = cb.history
+                    record_resource_sample("Training")
+                    curves_path = _save_learning_curves(cb.history)
+                    st.success(
+                        f"Fine-tuned model → `{result['path']}`  "
+                        f"· curves → `{curves_path}`"
+                    )
+
+            except Exception as e:
+                st.error(f"Stage failed: {e}")
+            finally:
+                st.session_state.training_active = False
+                st.rerun()
 
         if st.session_state.get("train_history", {}).get("epoch"):
             st.divider()
-            st.markdown(
-                '<div class="section-label">Final Learning Curves</div>',
-                unsafe_allow_html=True,
-            )
+            st.markdown('<div class="section-label">Final Learning Curves</div>', unsafe_allow_html=True)
             plot_learning_curves(st.session_state.train_history)
+
+        # ── Model Evaluation ─────────────────────────────────────────────
+        st.divider()
+        st.markdown('<div class="section-label">Model Evaluation</div>', unsafe_allow_html=True)
+        ev_c1, ev_c2 = st.columns([1, 1], gap="large")
+        with ev_c1:
+            eval_model_path = _model_picker("Model to evaluate", key="eval_model")
+            eval_test_dir   = st.text_input(
+                "Test directory", "data/splits/test",
+                help="Folder of class-named subdirectories, separate from training data.",
+            )
+            eval_btn = st.button("Evaluate Model", type="primary", use_container_width=True)
+        with ev_c2:
+            if eval_btn:
+                if not Path(eval_model_path).exists():
+                    st.error("Model file not found — select a valid path.")
+                elif not Path(eval_test_dir).exists():
+                    st.error("Test directory not found — check the path.")
+                else:
+                    with st.spinner("Evaluating on test set..."):
+                        try:
+                            ev_result = evaluate_model(eval_model_path, eval_test_dir)
+                            st.session_state.eval_result     = ev_result
+                            st.session_state.eval_model_name = Path(eval_model_path).name
+                        except Exception as e:
+                            st.error(f"Evaluation failed: {e}")
+
+            if st.session_state.get("eval_result"):
+                ev  = st.session_state.eval_result
+                acc = ev["accuracy"]
+                st.markdown(
+                    f'<div class="section-label">Results — {st.session_state.eval_model_name}</div>',
+                    unsafe_allow_html=True,
+                )
+                m1, m2 = st.columns(2)
+                m1.metric("Test Accuracy", f"{acc:.2%}")
+                m2.metric("Test Loss",     f"{ev['loss']:.4f}")
+                color   = "#2D9E6B" if acc >= 0.9 else "#F4A261" if acc >= 0.75 else "#E63946"
+                verdict = "Excellent — ready for deployment." if acc >= 0.9 else \
+                          "Good — consider more fine-tuning." if acc >= 0.75 else \
+                          "Needs improvement — try more epochs."
+                st.markdown(
+                    f'<div style="margin-top:0.75rem;padding:0.6rem 1rem;background:#F8FAFC;'
+                    f'border-radius:8px;border-left:4px solid {color};">'
+                    f'<span style="color:{color};font-weight:600;font-size:0.88rem;">{verdict}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    """
+                    <div style="background:#F8FAFC;border:2px dashed #E2E8F0;
+                                border-radius:12px;padding:2.5rem 1.5rem;text-align:center;">
+                        <div style="font-size:2rem;margin-bottom:0.5rem;">📊</div>
+                        <div style="color:#94A3B8;font-size:0.85rem;font-weight:500;">
+                            Select a model and test directory, then click Evaluate.
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
     # =========================================================================
     # SYSTEM DASHBOARD TAB

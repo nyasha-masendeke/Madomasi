@@ -1,8 +1,11 @@
+import json
 import tensorflow as tf
 from pathlib import Path
 from datetime import datetime
 import numpy as np
 from PIL import Image
+
+from config import DISEASE_CLASSES
 
 IMAGE_SIZE = (224, 224)
 
@@ -199,8 +202,6 @@ def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5
     class_idx = int(np.argmax(preds))
     confidence = float(preds[class_idx])
 
-    from config import DISEASE_CLASSES
-
     def class_name(i):
         return DISEASE_CLASSES[i] if i < len(DISEASE_CLASSES) else f"Class {i}"
 
@@ -234,3 +235,226 @@ def convert_model(keras_model_path: str, output_path: str):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(output_path).write_bytes(tflite_model)
     return output_path
+
+
+# =============================================================================
+# THREE-STAGE TRANSFER LEARNING  (mirrors Keras transfer learning guide)
+# https://keras.io/guides/transfer_learning/
+# =============================================================================
+
+def extract_features(
+    data_dir: str,
+    output_dir: str = "data/features",
+    batch_size: int = 32,
+    progress_fn=None,
+) -> dict:
+    """
+    Stage 1 — Feature Extraction.
+
+    Run every image through the frozen MobileNetV3Small base and cache the
+    resulting feature maps to disk as NumPy arrays.  Nothing is trained here;
+    the base model is used purely as a fixed feature extractor, exactly as
+    described in the Keras transfer-learning guide.
+
+    Returns a dict with:
+      features_dir  — directory containing features.npy, labels.npy, meta.json
+      num_samples   — total images processed
+      num_classes   — number of leaf-disease classes
+      feature_shape — spatial shape of one feature map, e.g. (7, 7, 576)
+      class_names   — ordered list of class folder names
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    base = tf.keras.applications.MobileNetV3Small(
+        input_shape=(*IMAGE_SIZE, 3), include_top=False, weights="imagenet"
+    )
+    base.trainable = False
+
+    ds = tf.keras.utils.image_dataset_from_directory(
+        data_dir, image_size=IMAGE_SIZE, batch_size=batch_size,
+        label_mode="int", shuffle=False,
+    ).prefetch(tf.data.AUTOTUNE)
+    class_names = ds.class_names
+
+    cardinality = tf.data.experimental.cardinality(ds).numpy()
+    total_batches = int(cardinality) if cardinality >= 0 else None
+
+    all_features, all_labels = [], []
+    for i, (images, labels) in enumerate(ds):
+        x = tf.keras.applications.mobilenet_v3.preprocess_input(images)
+        feats = base(x, training=False)
+        all_features.append(feats.numpy())
+        all_labels.append(labels.numpy())
+        if progress_fn:
+            progress_fn(i + 1, total_batches or (i + 1))
+
+    features_arr = np.concatenate(all_features, axis=0)
+    labels_arr   = np.concatenate(all_labels,   axis=0)
+
+    np.save(output_dir / "features.npy", features_arr)
+    np.save(output_dir / "labels.npy",   labels_arr)
+
+    meta = {
+        "class_names":   class_names,
+        "feature_shape": list(features_arr.shape[1:]),
+        "num_samples":   int(len(labels_arr)),
+        "num_classes":   len(class_names),
+    }
+    (output_dir / "meta.json").write_text(json.dumps(meta))
+
+    return {
+        "features_dir":  str(output_dir),
+        "num_samples":   int(len(labels_arr)),
+        "num_classes":   len(class_names),
+        "feature_shape": tuple(features_arr.shape[1:]),
+        "class_names":   class_names,
+    }
+
+
+def train_head(
+    features_dir: str = "data/features",
+    epochs: int = 10,
+    lr: float = 0.001,
+    val_split: float = 0.2,
+    output_path: str = "models/trained/latest.keras",
+    callbacks=None,
+) -> dict:
+    """
+    Stage 2 — Train the Classification Head.
+
+    Load the cached feature maps from extract_features() and train a small
+    head (GlobalAveragePooling2D → Dropout → Dense/softmax) on top of them.
+    The base model is not involved at all — only the head weights are updated.
+
+    After training, a full inference model (image input → preprocess → frozen
+    base → trained head) is assembled and saved so Stage 3 can load it for
+    fine-tuning.
+
+    Returns a dict with:
+      head_path       — best checkpoint for the head-only model
+      full_model_path — combined base + head model ready for fine-tuning
+      run_dir         — timestamped folder containing both checkpoints
+    """
+    features_dir = Path(features_dir)
+    features = np.load(features_dir / "features.npy")
+    labels   = np.load(features_dir / "labels.npy")
+    meta     = json.loads((features_dir / "meta.json").read_text())
+
+    num_classes   = meta["num_classes"]
+    feature_shape = tuple(meta["feature_shape"])
+
+    # Head: takes raw base spatial output → pool → classify
+    inputs  = tf.keras.Input(shape=feature_shape)
+    x       = tf.keras.layers.GlobalAveragePooling2D()(inputs)
+    x       = tf.keras.layers.Dropout(0.3)(x)
+    outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
+    head    = tf.keras.Model(inputs, outputs)
+
+    head.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+
+    ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = Path(output_path).parent / f"run_{ts}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    head_path = run_dir / "head.keras"
+
+    head.fit(
+        features, labels,
+        epochs=epochs,
+        validation_split=val_split,
+        shuffle=True,
+        callbacks=(callbacks or []) + [
+            tf.keras.callbacks.ModelCheckpoint(
+                str(head_path), monitor="val_accuracy",
+                save_best_only=True, mode="max", verbose=0,
+            ),
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss", patience=3,
+                restore_best_weights=True, verbose=0,
+            ),
+        ],
+        verbose=0,
+    )
+
+    # Assemble full model for fine-tuning: image → preprocess → frozen base → head
+    base = tf.keras.applications.MobileNetV3Small(
+        input_shape=(*IMAGE_SIZE, 3), include_top=False, weights="imagenet"
+    )
+    base.trainable = False
+    best_head = tf.keras.models.load_model(str(head_path))
+
+    img_in = tf.keras.Input((*IMAGE_SIZE, 3))
+    x      = tf.keras.applications.mobilenet_v3.preprocess_input(img_in)
+    x      = base(x, training=False)
+    x      = best_head(x)
+    full   = tf.keras.Model(img_in, x)
+
+    full_path = run_dir / "head_full.keras"
+    full.save(str(full_path))
+
+    return {
+        "head_path":       str(head_path),
+        "full_model_path": str(full_path),
+        "run_dir":         str(run_dir),
+    }
+
+
+def fine_tune_model(
+    model_path: str,
+    data_dir: str = "data/splits/train",
+    batch_size: int = 16,
+    epochs: int = 10,
+    lr: float = 0.00001,
+    output_path: str = "models/trained/latest.keras",
+    callbacks=None,
+) -> dict:
+    """
+    Stage 3 — Fine-Tuning.
+
+    Load the full model produced by train_head(), unfreeze the base model,
+    and train the entire network end-to-end at a very low learning rate so
+    the ImageNet features adapt to tomato-leaf patterns without catastrophic
+    forgetting — exactly as recommended in the Keras transfer-learning guide.
+
+    Returns a dict with:
+      model — final in-memory Keras model
+      path  — best fine-tuned checkpoint
+    """
+    model = tf.keras.models.load_model(model_path)
+
+    # Layer index 1 is the MobileNetV3Small base (same layout as build_model)
+    model.layers[1].trainable = True
+
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
+
+    train_ds, val_ds = load_datasets(data_dir, batch_size)
+
+    run_dir = Path(model_path).parent   # keep checkpoints in the same run folder
+    ft_path = run_dir / "fine_tuned.keras"
+
+    model.fit(
+        train_ds,
+        epochs=epochs,
+        validation_data=val_ds,
+        callbacks=(callbacks or []) + [
+            tf.keras.callbacks.ModelCheckpoint(
+                str(ft_path), monitor="val_accuracy",
+                save_best_only=True, mode="max", verbose=0,
+            ),
+            tf.keras.callbacks.EarlyStopping(
+                monitor="val_loss", patience=3,
+                restore_best_weights=True, verbose=0,
+            ),
+        ],
+        verbose=0,
+    )
+
+    return {"model": model, "path": str(ft_path)}

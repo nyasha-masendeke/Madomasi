@@ -238,6 +238,18 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
     border: 1px solid #EEF0F2 !important;
 }
 
+/* ── Widget Labels (toggle, text input, slider, select slider) ────────── */
+[data-testid="stWidgetLabel"],
+[data-testid="stWidgetLabel"] p,
+[data-testid="stWidgetLabel"] label,
+.stToggle label,
+.stToggle p,
+[data-testid="stToggle"] label,
+[data-testid="stToggle"] p {
+    color: #16213E !important;
+    font-weight: 500 !important;
+}
+
 /* ── Toggle ───────────────────────────────────────────────────────────── */
 [data-testid="stCheckbox"] span[aria-checked="true"],
 [role="switch"][aria-checked="true"] {
