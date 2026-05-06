@@ -368,7 +368,7 @@ def run_app():
                 try:
                     if st.session_state.get("training_two_stage"):
                         st.info("Stage 1/2: Feature extraction (base frozen)...")
-                        train_two_stage(
+                        result = train_two_stage(
                             fe_epochs=fe_epochs,
                             fe_lr=fe_lr,
                             ft_epochs=ft_epochs,
@@ -378,8 +378,10 @@ def run_app():
                             fe_callbacks=[cb],
                             ft_callbacks=[cb],
                         )
+                        st.session_state.last_stage1_path = result["stage1_path"]
+                        st.session_state.last_stage2_path = result["stage2_path"]
                     else:
-                        train_model(
+                        _, saved_path = train_model(
                             epochs=fe_epochs,
                             lr=fe_lr,
                             freeze_base=freeze,
@@ -387,6 +389,8 @@ def run_app():
                             output_path=model_path,
                             callbacks=[cb],
                         )
+                        st.session_state.last_stage2_path = saved_path
+                        st.session_state.last_stage1_path = None
                     st.session_state.train_history = cb.history
                     _save_learning_curves(cb.history)
                     st.success("✅ Training Complete!")
@@ -395,6 +399,14 @@ def run_app():
                 finally:
                     st.session_state.training_active = False
                     st.rerun()
+
+        # Show saved model paths after training
+        if st.session_state.get("last_stage2_path"):
+            st.divider()
+            st.subheader("💾 Saved Models")
+            if st.session_state.get("last_stage1_path"):
+                st.markdown(f"**Stage 1 — Feature Extraction:**  \n`{st.session_state.last_stage1_path}`")
+            st.markdown(f"**Stage 2 — Fine-Tuned (use for inference):**  \n`{st.session_state.last_stage2_path}`")
 
         if st.session_state.get("train_history", {}).get("epoch"):
             st.divider()

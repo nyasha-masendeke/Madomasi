@@ -1,5 +1,6 @@
 import tensorflow as tf
 from pathlib import Path
+from datetime import datetime
 import numpy as np
 from PIL import Image
 
@@ -66,11 +67,15 @@ def train_model(
         metrics=["accuracy"],
     )
 
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    # Timestamped save path so runs never overwrite each other
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_dir = Path(output_path).parent
+    save_dir.mkdir(parents=True, exist_ok=True)
+    save_path = save_dir / f"run_{ts}_single.keras"
 
     default_callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
-            output_path, monitor="val_accuracy", save_best_only=True,
+            str(save_path), monitor="val_accuracy", save_best_only=True,
             mode="max", verbose=0
         ),
         tf.keras.callbacks.EarlyStopping(
@@ -85,7 +90,7 @@ def train_model(
         callbacks=(callbacks or []) + default_callbacks,
         verbose=0,
     )
-    return model
+    return model, str(save_path)
 
 
 def train_two_stage(
@@ -109,15 +114,23 @@ def train_two_stage(
     Stage 2 — Fine-Tuning:
       Base model unfrozen. The entire network is trained end-to-end at a
       much lower learning rate to adapt ImageNet features to tomato leaves.
+
+    Returns a dict with keys:
+      stage1_path  — best Stage 1 checkpoint (feature extraction)
+      stage2_path  — best Stage 2 checkpoint (fine-tuned, use this for inference)
+      model        — the final in-memory Keras model
     """
     train_ds, val_ds = load_datasets(data_dir, batch_size)
     num_classes = len(train_ds.class_names)
 
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    # One timestamp per run — both stages share it so they group together on disk
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_dir = Path(output_path).parent
+    save_dir.mkdir(parents=True, exist_ok=True)
 
-    checkpoint = tf.keras.callbacks.ModelCheckpoint(
-        output_path, monitor="val_accuracy", save_best_only=True, mode="max", verbose=0
-    )
+    fe_path = save_dir / f"run_{ts}_stage1_fe.keras"
+    ft_path = save_dir / f"run_{ts}_stage2_ft.keras"
+
     early_stop = tf.keras.callbacks.EarlyStopping(
         monitor="val_loss", patience=3, restore_best_weights=True, verbose=0
     )
@@ -133,13 +146,18 @@ def train_two_stage(
         train_ds,
         epochs=fe_epochs,
         validation_data=val_ds,
-        callbacks=(fe_callbacks or []) + [checkpoint, early_stop],
+        callbacks=(fe_callbacks or []) + [
+            tf.keras.callbacks.ModelCheckpoint(
+                str(fe_path), monitor="val_accuracy", save_best_only=True, mode="max", verbose=0
+            ),
+            early_stop,
+        ],
         verbose=0,
     )
 
     # ── Stage 2: Fine-Tuning ─────────────────────────────────────────────
-    # Reload best checkpoint from stage 1 then unfreeze
-    model = tf.keras.models.load_model(output_path)
+    # Reload the best Stage 1 weights before unfreezing
+    model = tf.keras.models.load_model(str(fe_path))
     model.layers[1].trainable = True   # base model is layer index 1
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=ft_lr),
@@ -150,11 +168,20 @@ def train_two_stage(
         train_ds,
         epochs=ft_epochs,
         validation_data=val_ds,
-        callbacks=(ft_callbacks or []) + [checkpoint, early_stop],
+        callbacks=(ft_callbacks or []) + [
+            tf.keras.callbacks.ModelCheckpoint(
+                str(ft_path), monitor="val_accuracy", save_best_only=True, mode="max", verbose=0
+            ),
+            early_stop,
+        ],
         verbose=0,
     )
 
-    return model
+    return {
+        "stage1_path": str(fe_path),
+        "stage2_path": str(ft_path),
+        "model": model,
+    }
 
 
 def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5):
