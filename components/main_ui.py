@@ -277,6 +277,12 @@ def run_app():
                 "Point your **webcam** at a tomato leaf. "
                 "The model runs every 20 frames and draws the diagnosis directly on the video."
             )
+            st.warning(
+                "**Camera permission required.** When you click START, your browser will ask "
+                "for webcam access — click **Allow**. "
+                "If you see *NotAllowedError: Permission denied*, go to your browser's address bar "
+                "→ click the camera icon → set permission to **Allow** → refresh the page."
+            )
 
             model_path_cam = st.text_input(
                 "Model Path", "models/final/best_model.keras", key="cam_model_path"
