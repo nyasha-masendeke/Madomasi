@@ -48,17 +48,17 @@ def render_sidebar() -> dict:
         selected_classes = st.multiselect(
             "Choose diseases to detect",
             options=DISEASE_CLASSES,
-            default=["Early Blight", "Late Blight", "Bacterial Spot", "Healthy"],
+            default=DISEASE_CLASSES,
             help="Select which disease classes to actively detect"
         )
-        
+
         if selected_classes:
             st.write("**Active Filters:**")
             for disease in selected_classes:
-                cls = "healthy" if disease == "Healthy" else "diseased"
+                cls = "healthy" if "healthy" in disease.lower() else "diseased"
                 st.markdown(
                     f'<span class="disease-tag {cls}" style="'
-                    f'background: {"#4CAF50" if disease == "Healthy" else "#FF6B6B"}; '
+                    f'background: {"#4CAF50" if "healthy" in disease.lower() else "#FF6B6B"}; '
                     f'color: white; padding: 4px 12px; border-radius: 12px; '
                     f'display: inline-block; margin: 2px; font-size: 0.85em;">'
                     f'✓ {disease}</span>',

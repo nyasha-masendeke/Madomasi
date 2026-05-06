@@ -69,7 +69,7 @@ class FramePredictor:
         conf = result["confidence"]
         passes = result["passes"]
 
-        if disease == "Healthy":
+        if "healthy" in disease.lower():
             color = (0, 180, 0)       # green
         elif passes:
             color = (0, 0, 210)       # red
@@ -243,7 +243,7 @@ def run_app():
                                 )
                                 status = (
                                     "✅ Healthy"
-                                    if result["disease"] == "Healthy"
+                                    if "healthy" in result["disease"].lower()
                                     else "⚠️ Diseased"
                                 )
                                 st.markdown(f"### {status}: `{result['disease']}`")
