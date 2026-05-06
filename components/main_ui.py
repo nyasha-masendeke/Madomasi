@@ -1,4 +1,6 @@
+import os
 import threading
+from datetime import datetime
 from pathlib import Path
 
 import av
@@ -264,8 +266,6 @@ def load_cached_model(path: str):
 
 
 def _save_learning_curves(history: dict) -> str:
-    import os
-    from datetime import datetime
     os.makedirs("outputs", exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     path = f"outputs/learning_curves_{ts}.html"
@@ -518,6 +518,7 @@ def run_app():
                     "Learning rate", [0.0001, 0.001, 0.01, 0.1], value=0.001
                 )
                 freeze = st.toggle("Freeze Base Model", value=True)
+                ft_epochs = ft_lr = None  # not used in single-stage path
 
             st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
             btn_train = st.button(
