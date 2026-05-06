@@ -5,7 +5,7 @@ PAGE_CONFIG = {
     "page_title": "Tomato AI Diagnostics",
     "page_icon": "🍅",
     "layout": "wide",
-    "initial_sidebar_state": "expanded",
+    "initial_sidebar_state": "collapsed",
 }
 
 # Must match folder names in data/raw/raw/tomato/ sorted alphabetically —
@@ -40,6 +40,11 @@ DISEASE_DISPLAY = {
 CSS = """
 /* ── Google Fonts ─────────────────────────────────────────────────────── */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
+/* ── Hide Sidebar ─────────────────────────────────────────────────────── */
+section[data-testid="stSidebar"] { display: none !important; }
+[data-testid="collapseSidebarButton"] { display: none !important; }
+[data-testid="stSidebarCollapsedControl"] { display: none !important; }
 
 /* ── Base ─────────────────────────────────────────────────────────────── */
 html, body, [class*="css"] {

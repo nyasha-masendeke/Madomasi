@@ -12,7 +12,7 @@ from PIL import Image
 from plotly.subplots import make_subplots
 from streamlit_webrtc import RTCConfiguration, WebRtcMode, webrtc_streamer
 
-from components import sidebar
+from components.system_dashboard import render_dashboard
 from config import DISEASE_CLASSES, DISEASE_DISPLAY
 from pipeline import predict_image, train_model, train_two_stage
 from src.utils.recommendations import get_recommendation
@@ -292,16 +292,34 @@ def _save_learning_curves(history: dict) -> str:
 # =============================================================================
 
 def run_app():
-    params = sidebar.render_sidebar()
-
     _hero()
 
-    tab_inference, tab_training = st.tabs(["  Inference  ", "  Training Dashboard  "])
+    tab_inference, tab_training, tab_system = st.tabs([
+        "  Inference  ",
+        "  Training Dashboard  ",
+        "  System Dashboard  ",
+    ])
 
     # =========================================================================
     # INFERENCE TAB
     # =========================================================================
     with tab_inference:
+        # ── Inline settings bar ───────────────────────────────────────
+        with st.expander("Detection Settings", expanded=False):
+            s1, s2 = st.columns([1, 2])
+            confidence = s1.slider(
+                "Confidence threshold (%)", 0.0, 100.0, 50.0, 1.0,
+                help="Minimum probability required to report a detection",
+            )
+            selected_classes = s2.multiselect(
+                "Disease filter",
+                options=DISEASE_CLASSES,
+                default=DISEASE_CLASSES,
+                format_func=lambda x: DISEASE_DISPLAY.get(x, x),
+            )
+
+        st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
         mode = st.radio(
             "input_mode", ["Static Image", "Live Webcam"],
             horizontal=True, label_visibility="collapsed",
@@ -333,9 +351,7 @@ def run_app():
                     "Model path", "models/trained/latest.keras",
                     placeholder="models/trained/run_xxx/stage2_ft.keras",
                 )
-                st.markdown(
-                    _model_status_html(model_path), unsafe_allow_html=True
-                )
+                st.markdown(_model_status_html(model_path), unsafe_allow_html=True)
                 st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
 
                 run_btn = st.button(
@@ -347,11 +363,9 @@ def run_app():
                 if uploaded is None:
                     st.markdown(
                         """
-                        <div style="
-                            background:#F8FAFC;border:2px dashed #E2E8F0;
-                            border-radius:12px;padding:2.5rem 1.5rem;
-                            text-align:center;margin-top:1rem;
-                        ">
+                        <div style="background:#F8FAFC;border:2px dashed #E2E8F0;
+                                    border-radius:12px;padding:2.5rem 1.5rem;
+                                    text-align:center;margin-top:1rem;">
                             <div style="font-size:2rem;margin-bottom:0.5rem;">🌿</div>
                             <div style="color:#94A3B8;font-size:0.88rem;font-weight:500;">
                                 Upload a leaf image to begin diagnosis
@@ -365,7 +379,7 @@ def run_app():
                     with st.spinner("Analysing leaf..."):
                         try:
                             result = predict_image(
-                                model_path, uploaded, params["confidence"] / 100
+                                model_path, uploaded, confidence / 100
                             )
                             _diagnosis_card(result)
                             st.session_state.scans = st.session_state.get("scans", 0) + 1
@@ -384,14 +398,10 @@ def run_app():
                     '<div class="section-label">Live Camera Feed</div>',
                     unsafe_allow_html=True,
                 )
-                st.info(
-                    "Point your webcam at a tomato leaf. "
-                    "Diagnosis updates every ~20 frames.",
-                    icon="📷",
-                )
+                st.info("Point your webcam at a tomato leaf. Diagnosis updates every ~20 frames.", icon="📷")
                 st.warning(
                     "Click **Allow** when your browser asks for camera permission. "
-                    "If denied, click the camera icon in your address bar and set it to Allow, then refresh.",
+                    "If denied, click the camera icon in your address bar → Allow → refresh.",
                     icon="🔒",
                 )
                 model_path_cam = st.text_input(
@@ -399,7 +409,7 @@ def run_app():
                 )
                 if st.session_state.get("_cam_model_loaded") != model_path_cam:
                     st.session_state.frame_predictor = FramePredictor(
-                        model_path_cam, params["confidence"] / 100
+                        model_path_cam, confidence / 100
                     )
                     st.session_state._cam_model_loaded = model_path_cam
                 predictor = st.session_state.frame_predictor
@@ -413,10 +423,7 @@ def run_app():
                 )
 
             with col_live:
-                st.markdown(
-                    '<div class="section-label">Last Prediction</div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown('<div class="section-label">Last Prediction</div>', unsafe_allow_html=True)
                 if predictor._last_result:
                     r = predictor._last_result
                     display = DISEASE_DISPLAY.get(r["disease"], r["disease"])
@@ -442,11 +449,8 @@ def run_app():
                 else:
                     st.markdown(
                         """
-                        <div style="
-                            background:#F8FAFC;border:2px dashed #E2E8F0;
-                            border-radius:12px;padding:3rem 1.5rem;
-                            text-align:center;
-                        ">
+                        <div style="background:#F8FAFC;border:2px dashed #E2E8F0;
+                                    border-radius:12px;padding:3rem 1.5rem;text-align:center;">
                             <div style="font-size:2rem;margin-bottom:0.5rem;">📷</div>
                             <div style="color:#94A3B8;font-size:0.85rem;font-weight:500;">
                                 Start the camera to see live predictions
@@ -625,3 +629,9 @@ def run_app():
                 unsafe_allow_html=True,
             )
             plot_learning_curves(st.session_state.train_history)
+
+    # =========================================================================
+    # SYSTEM DASHBOARD TAB
+    # =========================================================================
+    with tab_system:
+        render_dashboard()
