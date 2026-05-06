@@ -28,11 +28,11 @@ def split_dataset(raw_dir: str, split_dir: str, ratios: tuple = (0.8, 0.1, 0.1))
             target.mkdir(parents=True, exist_ok=True)
             for img in imgs:
                 shutil.copy(img, target / img.name)
-    print(f"✅ Split complete. Output: {split_dir}")
+    print(f"Split complete. Output: {split_dir}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--split", action="store_true", help="Run dataset splitting")
     args = parser.parse_args()
     if args.split:
-        split_dataset("data/raw/tomato", "data/splits")
+        split_dataset("data/raw/raw/tomato", "data/splits")

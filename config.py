@@ -8,9 +8,19 @@ PAGE_CONFIG = {
     "initial_sidebar_state": "expanded"
 }
 
+# Must match folder names in data/raw/raw/tomato/ sorted alphabetically —
+# Keras image_dataset_from_directory assigns class indices in this order.
 DISEASE_CLASSES = [
-    "Early Blight", "Late Blight", "Bacterial Spot", "Target Spot",
-    "Tomato Yellow Leaf Curl", "Healthy"
+    "Tomato___Bacterial_spot",
+    "Tomato___Early_blight",
+    "Tomato___healthy",
+    "Tomato___Late_blight",
+    "Tomato___Leaf_Mold",
+    "Tomato___Septoria_leaf_spot",
+    "Tomato___Spider_mites Two-spotted_spider_mite",
+    "Tomato___Target_Spot",
+    "Tomato___Tomato_mosaic_virus",
+    "Tomato___Tomato_Yellow_Leaf_Curl_Virus",
 ]
 
 CSS_MODULES = {
