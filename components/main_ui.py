@@ -170,6 +170,41 @@ def load_cached_model(path: str):
     return tf.keras.models.load_model(path)
 
 
+def _save_learning_curves(history: dict):
+    """Save the final learning curve figure to outputs/ as an HTML file."""
+    import os
+    from datetime import datetime
+    os.makedirs("outputs", exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    path = f"outputs/learning_curves_{timestamp}.html"
+
+    df = pd.DataFrame(history).dropna()
+    fig = make_subplots(
+        rows=1, cols=2,
+        subplot_titles=("Accuracy vs Epochs", "Loss vs Epochs"),
+        horizontal_spacing=0.12,
+    )
+    epochs = df["epoch"]
+    fig.add_trace(go.Scatter(x=epochs, y=df["accuracy"], mode="lines+markers",
+                             name="Train Acc", line=dict(color="#2E7D32", width=2.5)), row=1, col=1)
+    if "val_accuracy" in df and df["val_accuracy"].notna().any():
+        fig.add_trace(go.Scatter(x=epochs, y=df["val_accuracy"], mode="lines+markers",
+                                 name="Val Acc", line=dict(color="#FF6F00", width=2.5, dash="dash")), row=1, col=1)
+    fig.add_trace(go.Scatter(x=epochs, y=df["loss"], mode="lines+markers",
+                             name="Train Loss", line=dict(color="#C62828", width=2.5)), row=1, col=2)
+    if "val_loss" in df and df["val_loss"].notna().any():
+        fig.add_trace(go.Scatter(x=epochs, y=df["val_loss"], mode="lines+markers",
+                                 name="Val Loss", line=dict(color="#1565C0", width=2.5, dash="dash")), row=1, col=2)
+
+    fig.update_layout(height=420, template="plotly_white", hovermode="x unified",
+                      margin=dict(l=40, r=20, t=60, b=40))
+    fig.update_xaxes(title_text="Epoch", dtick=1)
+    fig.update_yaxes(title_text="Score", row=1, col=1)
+    fig.update_yaxes(title_text="Loss", row=1, col=2)
+    fig.write_html(path)
+    return path
+
+
 # =============================================================================
 # MAIN APP
 # =============================================================================
@@ -288,7 +323,7 @@ def run_app():
                 "Learning Rate", options=[0.0001, 0.001, 0.01, 0.1], value=0.001
             )
             freeze = st.toggle("Freeze Base Model", value=True)
-            data_dir = st.text_input("Dataset Directory", "data/train")
+            data_dir = st.text_input("Dataset Directory", "data/splits/train")
             model_path = st.text_input("Save Path", "models/trained/latest.keras")
             btn_train = st.button(
                 "🚀 Start Training", type="primary", use_container_width=True,
@@ -296,9 +331,10 @@ def run_app():
             )
 
         with col_viz:
-            st.write("**📈 Real-time Metrics**")
+            st.write("**📈 Real-time Learning Curves**")
             progress_bar = st.progress(0, text="Waiting to start...")
             metrics_text = st.empty()
+            chart_placeholder = st.empty()
 
         if btn_train:
             st.session_state.training_active = True
@@ -307,7 +343,8 @@ def run_app():
         if st.session_state.get("training_active", False):
             progress_bar = st.progress(0, text="Initializing training...")
             metrics_text = st.empty()
-            cb = StreamlitTrainCallback(progress_bar, metrics_text)
+            chart_placeholder = st.empty()
+            cb = StreamlitTrainCallback(progress_bar, metrics_text, chart_placeholder)
             with st.spinner("🔄 Training in progress..."):
                 try:
                     train_model(
@@ -319,6 +356,7 @@ def run_app():
                         callbacks=[cb],
                     )
                     st.session_state.train_history = cb.history
+                    _save_learning_curves(cb.history)
                     st.success("✅ Training Complete!")
                 except Exception as e:
                     st.error(f"Training failed: {e}")
@@ -328,7 +366,7 @@ def run_app():
 
         if st.session_state.get("train_history", {}).get("epoch"):
             st.divider()
-            st.subheader("📊 Learning Curves")
+            st.subheader("📊 Final Learning Curves")
             plot_learning_curves(st.session_state.train_history)
 
     # ===== FOOTER =====

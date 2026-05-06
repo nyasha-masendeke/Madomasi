@@ -1,12 +1,15 @@
 import tensorflow as tf
 import streamlit as st
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 class StreamlitTrainCallback(tf.keras.callbacks.Callback):
-    def __init__(self, progress_bar, metrics_placeholder):
+    def __init__(self, progress_bar, metrics_placeholder, chart_placeholder):
         super().__init__()
         self.progress = progress_bar
         self.metrics = metrics_placeholder
+        self.chart = chart_placeholder
         self.history = {
             "epoch": [], "accuracy": [], "val_accuracy": [], "loss": [], "val_loss": []
         }
@@ -15,25 +18,96 @@ class StreamlitTrainCallback(tf.keras.callbacks.Callback):
         logs = logs or {}
         total = self.params.get("epochs", 1)
 
+        # Record metrics
         self.history["epoch"].append(epoch + 1)
         for key in ("accuracy", "val_accuracy", "loss", "val_loss"):
             self.history[key].append(logs.get(key))
 
+        # Progress bar
         self.progress.progress(
             (epoch + 1) / total,
-            text=f"Epoch {epoch + 1}/{total}"
+            text=f"Epoch {epoch + 1} / {total}"
         )
 
+        # Metric summary row
         acc = logs.get("accuracy", 0)
-        val_acc = logs.get("val_accuracy")
         loss = logs.get("loss", 0)
+        val_acc = logs.get("val_accuracy")
         val_loss = logs.get("val_loss")
 
-        val_line = ""
-        if val_acc is not None and val_loss is not None:
-            val_line = f" | Val Acc: `{val_acc:.3f}` | Val Loss: `{val_loss:.3f}`"
+        cols = self.metrics.columns(4)
+        cols[0].metric("Train Acc", f"{acc:.3f}")
+        cols[1].metric("Train Loss", f"{loss:.4f}")
+        cols[2].metric("Val Acc", f"{val_acc:.3f}" if val_acc is not None else "—")
+        cols[3].metric("Val Loss", f"{val_loss:.4f}" if val_loss is not None else "—")
 
-        self.metrics.markdown(
-            f"**Epoch {epoch + 1}/{total}** — "
-            f"Acc: `{acc:.3f}` | Loss: `{loss:.3f}`{val_line}"
+        # Live learning curves
+        self._render_curves()
+
+    def _render_curves(self):
+        epochs = self.history["epoch"]
+        if not epochs:
+            return
+
+        fig = make_subplots(
+            rows=1, cols=2,
+            subplot_titles=("Accuracy", "Loss"),
+            horizontal_spacing=0.12,
         )
+
+        # Accuracy
+        fig.add_trace(
+            go.Scatter(
+                x=epochs, y=self.history["accuracy"],
+                mode="lines+markers", name="Train Acc",
+                line=dict(color="#2E7D32", width=2.5),
+                marker=dict(size=6),
+            ),
+            row=1, col=1,
+        )
+        val_acc = [v for v in self.history["val_accuracy"] if v is not None]
+        if val_acc:
+            fig.add_trace(
+                go.Scatter(
+                    x=epochs[:len(val_acc)], y=val_acc,
+                    mode="lines+markers", name="Val Acc",
+                    line=dict(color="#FF6F00", width=2.5, dash="dash"),
+                    marker=dict(size=6),
+                ),
+                row=1, col=1,
+            )
+
+        # Loss
+        fig.add_trace(
+            go.Scatter(
+                x=epochs, y=self.history["loss"],
+                mode="lines+markers", name="Train Loss",
+                line=dict(color="#C62828", width=2.5),
+                marker=dict(size=6),
+            ),
+            row=1, col=2,
+        )
+        val_loss = [v for v in self.history["val_loss"] if v is not None]
+        if val_loss:
+            fig.add_trace(
+                go.Scatter(
+                    x=epochs[:len(val_loss)], y=val_loss,
+                    mode="lines+markers", name="Val Loss",
+                    line=dict(color="#1565C0", width=2.5, dash="dash"),
+                    marker=dict(size=6),
+                ),
+                row=1, col=2,
+            )
+
+        fig.update_layout(
+            height=380,
+            template="plotly_white",
+            hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
+            margin=dict(l=40, r=20, t=50, b=40),
+        )
+        fig.update_xaxes(title_text="Epoch", gridcolor="#EEEEEE", dtick=1)
+        fig.update_yaxes(title_text="Score", gridcolor="#EEEEEE", range=[0, 1], row=1, col=1)
+        fig.update_yaxes(title_text="Loss", gridcolor="#EEEEEE", row=1, col=2)
+
+        self.chart.plotly_chart(fig, use_container_width=True)
