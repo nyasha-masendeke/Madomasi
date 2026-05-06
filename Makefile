@@ -42,7 +42,7 @@ MODEL        ?= mobilenetv3small
 INPUT_SHAPE  ?= 224 224 3
 BATCH_SIZE   ?= 16
 DEVICE       ?= cpu
-OUT_DIR      ?= models/final/$(TIMESTAMP)
+OUT_DIR      ?= models/trained/$(TIMESTAMP)
 
 # Stage 1: Feature Extraction (frozen base model)
 EPOCHS_FE    ?= 10

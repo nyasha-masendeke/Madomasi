@@ -45,6 +45,8 @@ CSS_MODULES = {
     """
 }
 
+
+
 def inject_css():
     full_css = "\n".join(CSS_MODULES.values())
     st.markdown(f"<style>{full_css}</style>", unsafe_allow_html=True)
