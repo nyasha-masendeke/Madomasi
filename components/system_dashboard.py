@@ -76,12 +76,12 @@ def _gauge(value: float, title: str, color: str, suffix: str = "%") -> go.Figure
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=value,
+        domain={"x": [0.05, 0.95], "y": [0.05, 1.0]},
         number={"valueformat": ".0f", "suffix": suffix,
-                "font": {"size": 20, "color": "#16213E", "family": "Inter"}},
+                "font": {"size": 28, "color": "#16213E", "family": "Inter"}},
         title={"text": title, "font": {"size": 13, "color": "#6B7280", "family": "Inter"}},
         gauge={
-            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#E2E8F0",
-                     "tickfont": {"size": 9, "color": "#94A3B8"}},
+            "axis": {"range": [0, 100], "tickwidth": 0, "showticklabels": False},
             "bar": {"color": color, "thickness": 0.28},
             "bgcolor": "#F8FAFC",
             "borderwidth": 0,
@@ -98,8 +98,9 @@ def _gauge(value: float, title: str, color: str, suffix: str = "%") -> go.Figure
         },
     ))
     fig.update_layout(
-        height=220,
-        margin=dict(l=20, r=20, t=45, b=15),
+        width=260,
+        height=240,
+        margin=dict(l=10, r=10, t=30, b=10),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font={"family": "Inter"},
@@ -279,7 +280,7 @@ def render_dashboard():
 
     with g1:
         st.markdown('<div class="section-label">CPU</div>', unsafe_allow_html=True)
-        st.plotly_chart(_gauge(stats["cpu"], "CPU Usage", cpu_color), use_container_width=True, key="g_cpu")
+        st.plotly_chart(_gauge(stats["cpu"], "CPU Usage", cpu_color), use_container_width=False, key="g_cpu")
         st.markdown(
             f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
             f'{stats["cpu_count"]} physical &nbsp;·&nbsp; {stats["cpu_count_logical"]} logical cores</p>',
@@ -287,7 +288,7 @@ def render_dashboard():
         )
     with g2:
         st.markdown('<div class="section-label">Memory</div>', unsafe_allow_html=True)
-        st.plotly_chart(_gauge(stats["ram"], "RAM Usage", ram_color), use_container_width=True, key="g_ram")
+        st.plotly_chart(_gauge(stats["ram"], "RAM Usage", ram_color), use_container_width=False, key="g_ram")
         st.markdown(
             f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
             f'{stats["ram_used_gb"]:.1f} GB used of {stats["ram_total_gb"]:.1f} GB</p>',
@@ -295,7 +296,7 @@ def render_dashboard():
         )
     with g3:
         st.markdown('<div class="section-label">Disk</div>', unsafe_allow_html=True)
-        st.plotly_chart(_gauge(stats["disk"], "Disk Usage", disk_color), use_container_width=True, key="g_disk")
+        st.plotly_chart(_gauge(stats["disk"], "Disk Usage", disk_color), use_container_width=False, key="g_disk")
         st.markdown(
             f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
             f'{stats["disk_used_gb"]:.1f} GB used of {stats["disk_total_gb"]:.1f} GB</p>',
