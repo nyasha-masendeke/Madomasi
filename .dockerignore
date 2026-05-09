@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# Claude / IDE
+.claude/
+.vscode/
+.idea/
+
+# Large data — mount these as volumes instead
+data/raw/
+data/splits/
+outputs/Training*/
+outputs/training_curves/
+outputs/inference_log.jsonl
+
+# Trained model weights — mount as volume
+models/trained/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Notebooks
+notebooks/
+*.ipynb
+
+# Tests & docs
+tests/
+Documentation/
+docs/
+
+# Symlinks (replaced by volume mounts in docker-compose)
+data
+models
+outputs

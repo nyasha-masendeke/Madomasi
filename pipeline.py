@@ -1,4 +1,6 @@
 import json
+import random
+import shutil
 import tensorflow as tf
 from pathlib import Path
 from datetime import datetime
@@ -8,6 +10,39 @@ from PIL import Image
 from config import DISEASE_CLASSES
 
 IMAGE_SIZE = (224, 224)
+
+
+def _next_training_output_dir() -> Path:
+    """Return the next unused outputs/TrainingN directory and create it.
+
+    outputs/Training1  →  first training run
+    outputs/Training2  →  second training run
+    ...
+    """
+    base = Path("outputs")
+    base.mkdir(exist_ok=True)
+    existing = [
+        int(p.name[8:])
+        for p in base.iterdir()
+        if p.is_dir() and p.name.startswith("Training") and p.name[8:].isdigit()
+    ]
+    n = max(existing, default=0) + 1
+    d = base / f"Training{n}"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def log_inference(disease: str, confidence: float, model_name: str) -> None:
+    """Append one prediction to outputs/inference_log.jsonl for drift monitoring."""
+    log_path = Path("outputs/inference_log.jsonl")
+    log_path.parent.mkdir(exist_ok=True)
+    with open(log_path, "a") as f:
+        f.write(json.dumps({
+            "ts":         datetime.now().isoformat(),
+            "disease":    disease,
+            "confidence": round(float(confidence), 4),
+            "model":      model_name,
+        }) + "\n")
 
 
 def load_datasets(data_dir: str, batch_size: int, val_split: float = 0.2):
@@ -194,7 +229,7 @@ def train_two_stage(
 def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5):
     model = tf.keras.models.load_model(model_path)
 
-    img = Image.open(image_data).resize(IMAGE_SIZE).convert("RGB")
+    img = Image.open(image_data).resize(IMAGE_SIZE, Image.BILINEAR).convert("RGB")
     # Raw [0, 255] float32 — preprocess_input is baked into the model graph (build_model)
     arr = np.expand_dims(np.array(img, dtype=np.float32), axis=0)
 
@@ -215,6 +250,15 @@ def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5
 
 def evaluate_model(model_path: str, test_dir: str, batch_size: int = 16):
     model = tf.keras.models.load_model(model_path)
+    # Compile is needed when the model was assembled (e.g. head_full) but not
+    # compiled before saving — compile here with the same settings used for fine-tuning.
+    # Always compile — harmless if already compiled, required for models
+    # saved without an optimizer (e.g. head_full assembled in train_head).
+    model.compile(
+        optimizer=tf.keras.optimizers.Adam(),
+        loss="sparse_categorical_crossentropy",
+        metrics=["accuracy"],
+    )
     test_ds = tf.keras.utils.image_dataset_from_directory(
         test_dir,
         image_size=IMAGE_SIZE,
@@ -235,6 +279,88 @@ def convert_model(keras_model_path: str, output_path: str):
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(output_path).write_bytes(tflite_model)
     return output_path
+
+
+# =============================================================================
+# DATASET SPLITTING
+# =============================================================================
+
+def split_dataset(
+    source_dir: str,
+    output_dir: str = "data/splits",
+    train_ratio: float = 0.7,
+    val_ratio: float = 0.2,
+    test_ratio: float = 0.1,
+    seed: int = 42,
+    progress_fn=None,
+) -> dict:
+    """
+    Copy images from a flat class-named directory structure into train/val/test splits.
+
+    source_dir layout expected:
+        source_dir/
+            ClassName_A/img1.jpg ...
+            ClassName_B/img1.jpg ...
+
+    Output:
+        output_dir/train/ClassName_A/ ...
+        output_dir/val/ClassName_A/   ...
+        output_dir/test/ClassName_A/  ...
+
+    Files are copied — the source dataset is never modified.
+
+    Returns a dict with:
+      train_dir, val_dir, test_dir  — absolute paths to each split
+      counts                        — {split: total_images}
+      num_classes                   — number of class folders found
+    """
+    if abs(train_ratio + val_ratio + test_ratio - 1.0) > 1e-6:
+        raise ValueError("train_ratio + val_ratio + test_ratio must equal 1.0")
+
+    source  = Path(source_dir)
+    output  = Path(output_dir)
+    exts    = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+    splits  = ["train", "val", "test"]
+    counts  = {s: 0 for s in splits}
+
+    class_dirs = sorted([d for d in source.iterdir() if d.is_dir()])
+    if not class_dirs:
+        raise ValueError(f"No class subdirectories found in {source_dir}")
+
+    random.seed(seed)
+
+    for idx, class_dir in enumerate(class_dirs):
+        images = sorted([f for f in class_dir.iterdir() if f.suffix.lower() in exts])
+        random.shuffle(images)
+
+        n       = len(images)
+        n_train = int(n * train_ratio)
+        n_val   = int(n * val_ratio)
+
+        buckets = {
+            "train": images[:n_train],
+            "val":   images[n_train: n_train + n_val],
+            "test":  images[n_train + n_val:],
+        }
+
+        for split, imgs in buckets.items():
+            dest = output / split / class_dir.name
+            dest.mkdir(parents=True, exist_ok=True)
+            for img in imgs:
+                shutil.copy2(img, dest / img.name)
+            counts[split] += len(imgs)
+
+        if progress_fn:
+            progress_fn(idx + 1, len(class_dirs), class_dir.name)
+
+    return {
+        "output_dir": str(output),
+        "train_dir":  str(output / "train"),
+        "val_dir":    str(output / "val"),
+        "test_dir":   str(output / "test"),
+        "counts":     counts,
+        "num_classes": len(class_dirs),
+    }
 
 
 # =============================================================================
@@ -271,11 +397,12 @@ def extract_features(
     )
     base.trainable = False
 
-    ds = tf.keras.utils.image_dataset_from_directory(
+    ds_raw = tf.keras.utils.image_dataset_from_directory(
         data_dir, image_size=IMAGE_SIZE, batch_size=batch_size,
         label_mode="int", shuffle=False,
-    ).prefetch(tf.data.AUTOTUNE)
-    class_names = ds.class_names
+    )
+    class_names = ds_raw.class_names          # capture before prefetch strips it
+    ds = ds_raw.prefetch(tf.data.AUTOTUNE)
 
     cardinality = tf.data.experimental.cardinality(ds).numpy()
     total_batches = int(cardinality) if cardinality >= 0 else None
@@ -341,6 +468,14 @@ def train_head(
     labels   = np.load(features_dir / "labels.npy")
     meta     = json.loads((features_dir / "meta.json").read_text())
 
+    # Shuffle before validation split: features are extracted in alphabetical
+    # class order, so without shuffling Keras's validation_split would take only
+    # the last class(es), causing 0% validation accuracy on unseen classes.
+    rng  = np.random.default_rng(42)
+    perm = rng.permutation(len(features))
+    features = features[perm]
+    labels   = labels[perm]
+
     num_classes   = meta["num_classes"]
     feature_shape = tuple(meta["feature_shape"])
 
@@ -362,7 +497,7 @@ def train_head(
     run_dir.mkdir(parents=True, exist_ok=True)
     head_path = run_dir / "head.keras"
 
-    head.fit(
+    keras_hist = head.fit(
         features, labels,
         epochs=epochs,
         validation_split=val_split,
@@ -379,6 +514,27 @@ def train_head(
         ],
         verbose=0,
     )
+
+    # Persist history so the UI can show learning curves even after CLI runs.
+    # Saved to outputs/TrainingN/ so the dashboard can discover it by scanning
+    # that folder in sequential order.
+    history_data = {
+        "epoch":        list(range(1, len(keras_hist.history["accuracy"]) + 1)),
+        "accuracy":     [float(v) for v in keras_hist.history.get("accuracy", [])],
+        "val_accuracy": [float(v) for v in keras_hist.history.get("val_accuracy", [])],
+        "loss":         [float(v) for v in keras_hist.history.get("loss", [])],
+        "val_loss":     [float(v) for v in keras_hist.history.get("val_loss", [])],
+    }
+    # Reuse the callback's TrainingN dir if it was created during training
+    # (UI runs), otherwise create a fresh one (CLI runs).
+    cb_dir = next(
+        (getattr(cb, "output_dir", None) for cb in (callbacks or []) if getattr(cb, "output_dir", None)),
+        None,
+    )
+    out_dir = cb_dir if cb_dir else _next_training_output_dir()
+    (out_dir / "history_head.json").write_text(json.dumps(history_data))
+    # Also keep a copy alongside the model checkpoint for reference
+    (run_dir / "history_head.json").write_text(json.dumps(history_data))
 
     # Assemble full model for fine-tuning: image → preprocess → frozen base → head
     base = tf.keras.applications.MobileNetV3Small(
@@ -400,6 +556,7 @@ def train_head(
         "head_path":       str(head_path),
         "full_model_path": str(full_path),
         "run_dir":         str(run_dir),
+        "history":         history_data,
     }
 
 
@@ -440,7 +597,7 @@ def fine_tune_model(
     run_dir = Path(model_path).parent   # keep checkpoints in the same run folder
     ft_path = run_dir / "fine_tuned.keras"
 
-    model.fit(
+    keras_hist = model.fit(
         train_ds,
         epochs=epochs,
         validation_data=val_ds,
@@ -457,4 +614,22 @@ def fine_tune_model(
         verbose=0,
     )
 
-    return {"model": model, "path": str(ft_path)}
+    # Persist history so the UI can show learning curves even after CLI runs.
+    # Saved to outputs/TrainingN/ so the dashboard can discover it in order.
+    history_data = {
+        "epoch":        list(range(1, len(keras_hist.history["accuracy"]) + 1)),
+        "accuracy":     [float(v) for v in keras_hist.history.get("accuracy", [])],
+        "val_accuracy": [float(v) for v in keras_hist.history.get("val_accuracy", [])],
+        "loss":         [float(v) for v in keras_hist.history.get("loss", [])],
+        "val_loss":     [float(v) for v in keras_hist.history.get("val_loss", [])],
+    }
+    cb_dir = next(
+        (getattr(cb, "output_dir", None) for cb in (callbacks or []) if getattr(cb, "output_dir", None)),
+        None,
+    )
+    out_dir = cb_dir if cb_dir else _next_training_output_dir()
+    (out_dir / "history_finetune.json").write_text(json.dumps(history_data))
+    # Also keep a copy alongside the model checkpoint
+    (run_dir / "history_finetune.json").write_text(json.dumps(history_data))
+
+    return {"model": model, "path": str(ft_path), "history": history_data}

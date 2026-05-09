@@ -171,6 +171,17 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
     border-radius: 6px !important;
 }
 
+/* ── Spinner ──────────────────────────────────────────────────────────── */
+[data-testid="stSpinner"] p,
+[data-testid="stSpinner"] span,
+[data-testid="stSpinner"] div {
+    color: #16213E !important;
+}
+[data-testid="stSpinner"] svg {
+    stroke: #E63946 !important;
+    color: #E63946 !important;
+}
+
 /* ── Text Inputs ──────────────────────────────────────────────────────── */
 .stTextInput > div > div > input {
     border-radius: 8px !important;
@@ -178,10 +189,34 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
     font-size: 0.88rem !important;
     padding: 0.5rem 0.75rem !important;
     background: white !important;
+    color: #16213E !important;
 }
 .stTextInput > div > div > input:focus {
     border-color: #E63946 !important;
     box-shadow: 0 0 0 3px rgba(230,57,70,0.1) !important;
+}
+.stTextInput > div > div > input::placeholder {
+    color: #94A3B8 !important;
+}
+
+/* ── Number Input ─────────────────────────────────────────────────────── */
+.stNumberInput > div > div > input {
+    border-radius: 8px !important;
+    border: 1.5px solid #E2E8F0 !important;
+    background: white !important;
+    color: #16213E !important;
+}
+
+/* ── Select / Multiselect / SelectSlider text ─────────────────────────── */
+.stSelectbox > div > div,
+.stMultiSelect > div > div,
+.stSelectSlider > div {
+    color: #16213E !important;
+}
+[data-baseweb="select"] [data-testid="stMarkdownContainer"] p,
+[data-baseweb="select"] span,
+[data-baseweb="input"] input {
+    color: #16213E !important;
 }
 
 /* ── Select / Multiselect ─────────────────────────────────────────────── */
@@ -203,6 +238,26 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
     border-radius: 10px !important;
     border: 1px solid #EEF0F2 !important;
     box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+/* Collapsed — dark text on light background */
+[data-testid="stExpander"] summary {
+    color: #16213E !important;
+}
+[data-testid="stExpander"] summary svg {
+    fill: #16213E !important;
+}
+/* Expanded — white text on dark background */
+[data-testid="stExpander"] details[open] > summary {
+    color: #FFFFFF !important;
+}
+[data-testid="stExpander"] details[open] > summary svg {
+    fill: #FFFFFF !important;
+}
+
+/* ── Gauge charts — center fixed-size charts within their column ────────── */
+[data-testid="stPlotlyChart"] {
+    display: flex;
+    justify-content: center;
 }
 
 /* ── File Uploader ────────────────────────────────────────────────────── */
@@ -277,7 +332,7 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
     text-transform: uppercase;
     letter-spacing: 1.2px;
     color: #94A3B8;
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.3rem;
 }
 .diagnosis-card-healthy {
     background: linear-gradient(135deg, #ECFDF5 0%, #D1FAE5 100%);
@@ -327,8 +382,8 @@ section[data-testid="stSidebar"] [data-testid="stExpander"] {
     background: linear-gradient(135deg, #F8FAFC, #EEF2FF);
     border: 1px solid #E0E7FF;
     border-radius: 10px;
-    padding: 0.75rem 1rem;
-    margin-bottom: 0.75rem;
+    padding: 0.45rem 0.75rem;
+    margin-bottom: 0.5rem;
 }
 .stage-title {
     font-size: 0.82rem;

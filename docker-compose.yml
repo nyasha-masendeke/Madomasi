@@ -1,0 +1,24 @@
+services:
+  madomasi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: madomasi:latest
+    container_name: madomasi
+    ports:
+      - "8501:8501"
+    volumes:
+      # Persist datasets, models and training outputs outside the container
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./outputs:/app/outputs
+    environment:
+      - STREAMLIT_SERVER_HEADLESS=true
+      - STREAMLIT_SERVER_FILE_WATCHER_TYPE=none
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
