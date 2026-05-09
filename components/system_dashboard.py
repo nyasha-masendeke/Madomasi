@@ -1,8 +1,11 @@
 """System resource dashboard tab — CPU, RAM, disk, and usage history."""
+import json
 import platform
 import time
 from datetime import datetime
+from pathlib import Path
 
+import pandas as pd
 import plotly.graph_objects as go
 import psutil
 import streamlit as st
@@ -13,8 +16,17 @@ from plotly.subplots import make_subplots
 def _get_stats() -> dict:
     vm   = psutil.virtual_memory()
     disk = psutil.disk_usage("C:\\" if platform.system() == "Windows" else "/")
+
+    # interval=1.0 blocks for 1 s to get an accurate system-wide reading.
+    # percpu=True lets us report the busiest core separately so a single
+    # heavy subprocess doesn't get hidden by averaging across all cores.
+    per_cpu = psutil.cpu_percent(interval=1.0, percpu=True)
+    cpu_avg = sum(per_cpu) / len(per_cpu)
+    cpu_max = max(per_cpu)
+
     stats = {
-        "cpu": psutil.cpu_percent(interval=0.3),
+        "cpu": cpu_avg,
+        "cpu_max_core": cpu_max,
         "ram": vm.percent,
         "ram_used_gb": vm.used / 1e9,
         "ram_total_gb": vm.total / 1e9,
@@ -76,12 +88,12 @@ def _gauge(value: float, title: str, color: str, suffix: str = "%") -> go.Figure
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
         value=value,
-        domain={"x": [0.05, 0.95], "y": [0.05, 1.0]},
         number={"valueformat": ".0f", "suffix": suffix,
-                "font": {"size": 28, "color": "#16213E", "family": "Inter"}},
+                "font": {"size": 20, "color": "#16213E", "family": "Inter"}},
         title={"text": title, "font": {"size": 13, "color": "#6B7280", "family": "Inter"}},
         gauge={
-            "axis": {"range": [0, 100], "tickwidth": 0, "showticklabels": False},
+            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#E2E8F0",
+                     "tickfont": {"size": 9, "color": "#94A3B8"}},
             "bar": {"color": color, "thickness": 0.28},
             "bgcolor": "#F8FAFC",
             "borderwidth": 0,
@@ -98,9 +110,8 @@ def _gauge(value: float, title: str, color: str, suffix: str = "%") -> go.Figure
         },
     ))
     fig.update_layout(
-        width=260,
-        height=240,
-        margin=dict(l=10, r=10, t=30, b=10),
+        height=220,
+        margin=dict(l=20, r=20, t=45, b=15),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font={"family": "Inter"},
@@ -186,10 +197,115 @@ def _history_chart(history: list) -> go.Figure:
     return fig
 
 
-def render_dashboard():
-    stats = _get_stats()
+def _drift_panel() -> None:
+    """Confidence trend and basic drift detection from the inference log."""
+    st.markdown('<div class="section-label">Inference Drift Monitor</div>', unsafe_allow_html=True)
 
-    # Append idle sample to history (keep last 60 samples)
+    log_path = Path("outputs/inference_log.jsonl")
+    if not log_path.exists():
+        st.info(
+            "No inference log yet — run predictions to populate drift metrics.",
+            icon="📊",
+        )
+        return
+
+    try:
+        df = pd.read_json(log_path, lines=True)
+    except Exception:
+        st.warning("Inference log exists but could not be read.")
+        return
+
+    if len(df) < 5:
+        st.info(f"{len(df)} prediction(s) logged — need at least 5 for analysis.", icon="📊")
+        return
+
+    df["ts"] = pd.to_datetime(df["ts"])
+    df = df.sort_values("ts").reset_index(drop=True)
+
+    # Summary row
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Predictions", len(df))
+    m2.metric("Avg Confidence",    f"{df['confidence'].mean():.1%}")
+    m3.metric("Below 50%",         int((df["confidence"] < 0.5).sum()))
+    m4.metric("Unique Models",     df["model"].nunique())
+
+    # Confidence trend chart
+    df["rolling"] = df["confidence"].rolling(min(5, len(df)), min_periods=1).mean()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=df["ts"], y=df["confidence"],
+        mode="markers", name="Per prediction",
+        marker=dict(color="#CBD5E0", size=5),
+        hovertemplate="%{y:.1%}",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["ts"], y=df["rolling"],
+        mode="lines", name="Rolling avg",
+        line=dict(color="#E63946", width=2.5),
+        hovertemplate="%{y:.1%}",
+    ))
+    fig.add_hline(y=0.5, line_dash="dash", line_color="#F4A261",
+                  annotation_text="50% threshold", annotation_position="bottom right")
+    fig.update_layout(
+        height=240, template="plotly_white", hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
+        margin=dict(l=20, r=20, t=30, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(tickformat=".0%", range=[0, 1]),
+    )
+    st.plotly_chart(fig, use_container_width=True, key="drift_chart")
+
+    # Drift alert based on confidence delta
+    if len(df) >= 20:
+        baseline = df.head(10)["confidence"].mean()
+        recent   = df.tail(10)["confidence"].mean()
+        delta    = recent - baseline
+        if delta < -0.15:
+            st.error(
+                f"Confidence dropped {abs(delta):.1%} vs baseline — "
+                "possible data drift. Consider retraining.",
+                icon="🔴",
+            )
+        elif delta < -0.08:
+            st.warning(
+                f"Confidence down {abs(delta):.1%} vs baseline — monitor closely.",
+                icon="⚠️",
+            )
+        else:
+            st.success("Confidence stable — no significant drift detected.", icon="✅")
+
+    # Class distribution expander
+    with st.expander("Prediction class distribution"):
+        from config import DISEASE_DISPLAY
+        dist = (
+            df["disease"]
+            .value_counts()
+            .rename_axis("Disease")
+            .reset_index(name="Count")
+        )
+        dist["Disease"] = dist["Disease"].map(lambda x: DISEASE_DISPLAY.get(x, x))
+        st.dataframe(dist, use_container_width=True, hide_index=True)
+
+    if st.button("Clear inference log", type="secondary", key="clear_inf_log"):
+        log_path.unlink(missing_ok=True)
+        st.rerun()
+
+
+@st.fragment(run_every="5s")
+def _live_metrics() -> None:
+    """Gauges + history — reruns every 5 s independently of the main page.
+
+    Using @st.fragment avoids the old time.sleep(5); st.rerun() pattern that
+    blocked the entire Streamlit server thread and froze the UI.
+    """
+    auto_refresh = st.session_state.get("_sys_auto_refresh", True)
+    if not auto_refresh:
+        return
+
+    stats = _get_stats()          # blocks ~1 s for accurate CPU reading
+
+    # Append sample to history (60 samples max)
     if "resource_history" not in st.session_state:
         st.session_state.resource_history = []
     st.session_state.resource_history.append({
@@ -199,37 +315,6 @@ def render_dashboard():
         "activity": "",
     })
     st.session_state.resource_history = st.session_state.resource_history[-60:]
-
-    # ── Header ────────────────────────────────────────────────────────
-    col_title, col_auto, col_refresh = st.columns([3, 1, 1])
-    col_title.markdown(
-        """
-        <div style="margin-bottom:0.25rem;">
-            <span style="font-size:0.7rem;font-weight:700;text-transform:uppercase;
-                         letter-spacing:1.2px;color:#94A3B8;">Live Monitoring</span>
-            <h3 style="margin:0;color:#16213E;font-size:1.3rem;font-weight:700;">
-                System Resource Usage
-            </h3>
-            <p style="margin:0;color:#6B7280;font-size:0.85rem;">
-                Tracks CPU, memory and disk load during training and inference.
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    auto_refresh = col_auto.checkbox(
-        "Auto-refresh", value=False,
-        help="Refreshes every 5 seconds. Disabled automatically during training.",
-    )
-    if col_refresh.button("Refresh", type="secondary", use_container_width=True):
-        st.rerun()
-
-    # Auto-refresh — skip during training to avoid interrupting it
-    if auto_refresh and not st.session_state.get("training_active", False):
-        time.sleep(5)
-        st.rerun()
-
-    st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
 
     # ── Activity Status Banner ─────────────────────────────────────────
     is_training   = st.session_state.get("training_active", False)
@@ -280,15 +365,17 @@ def render_dashboard():
 
     with g1:
         st.markdown('<div class="section-label">CPU</div>', unsafe_allow_html=True)
-        st.plotly_chart(_gauge(stats["cpu"], "CPU Usage", cpu_color), use_container_width=False, key="g_cpu")
+        st.plotly_chart(_gauge(stats["cpu"], "CPU Usage", cpu_color), use_container_width=True, key="g_cpu")
+        max_core = stats.get("cpu_max_core", stats["cpu"])
         st.markdown(
             f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
-            f'{stats["cpu_count"]} physical &nbsp;·&nbsp; {stats["cpu_count_logical"]} logical cores</p>',
+            f'{stats["cpu_count"]} physical &nbsp;·&nbsp; {stats["cpu_count_logical"]} logical cores'
+            f'<br>Busiest core: <b style="color:#16213E">{max_core:.0f}%</b></p>',
             unsafe_allow_html=True,
         )
     with g2:
         st.markdown('<div class="section-label">Memory</div>', unsafe_allow_html=True)
-        st.plotly_chart(_gauge(stats["ram"], "RAM Usage", ram_color), use_container_width=False, key="g_ram")
+        st.plotly_chart(_gauge(stats["ram"], "RAM Usage", ram_color), use_container_width=True, key="g_ram")
         st.markdown(
             f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
             f'{stats["ram_used_gb"]:.1f} GB used of {stats["ram_total_gb"]:.1f} GB</p>',
@@ -296,7 +383,7 @@ def render_dashboard():
         )
     with g3:
         st.markdown('<div class="section-label">Disk</div>', unsafe_allow_html=True)
-        st.plotly_chart(_gauge(stats["disk"], "Disk Usage", disk_color), use_container_width=False, key="g_disk")
+        st.plotly_chart(_gauge(stats["disk"], "Disk Usage", disk_color), use_container_width=True, key="g_disk")
         st.markdown(
             f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
             f'{stats["disk_used_gb"]:.1f} GB used of {stats["disk_total_gb"]:.1f} GB</p>',
@@ -351,19 +438,62 @@ def render_dashboard():
 
     st.divider()
 
-    # ── System Info ────────────────────────────────────────────────────
+
+def render_dashboard():
+    # ── Header ────────────────────────────────────────────────────────
+    col_title, col_auto, col_refresh = st.columns([3, 1, 1])
+    col_title.markdown(
+        """
+        <div style="margin-bottom:0.25rem;">
+            <span style="font-size:0.7rem;font-weight:700;text-transform:uppercase;
+                         letter-spacing:1.2px;color:#94A3B8;">Live Monitoring</span>
+            <h3 style="margin:0;color:#16213E;font-size:1.3rem;font-weight:700;">
+                System Resource Usage
+            </h3>
+            <p style="margin:0;color:#6B7280;font-size:0.85rem;">
+                Tracks CPU, memory and disk load during training and inference.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    auto_refresh = col_auto.checkbox(
+        "Auto-refresh", value=True,
+        help="Polls every 5 seconds without blocking the UI.",
+    )
+    # Store in session_state so the fragment can read the latest value
+    st.session_state["_sys_auto_refresh"] = auto_refresh
+
+    if col_refresh.button("Refresh", type="secondary", use_container_width=True):
+        st.rerun()
+
+    st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
+
+    # Live metrics fragment — reruns every 5 s independently (no blocking sleep)
+    _live_metrics()
+
+    st.divider()
+
+    # ── System Info (static — doesn't need live refresh) ───────────────
     st.markdown('<div class="section-label">System Information</div>', unsafe_allow_html=True)
+    cpu_phys = psutil.cpu_count(logical=False)
+    cpu_log  = psutil.cpu_count(logical=True)
     i1, i2, i3, i4 = st.columns(4)
-    i1.metric("Operating System", stats["os"])
-    i2.metric("Python Version", stats["python"])
-    i3.metric("Architecture", stats["machine"])
-    i4.metric("CPU Cores", f'{stats["cpu_count"]} / {stats["cpu_count_logical"]}',
+    i1.metric("Operating System", platform.system())
+    i2.metric("Python Version",   platform.python_version())
+    i3.metric("Architecture",     platform.machine())
+    i4.metric("CPU Cores", f"{cpu_phys} / {cpu_log}",
               delta="physical / logical", delta_color="off")
 
     st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
-    gpu_count = stats.get("gpu_count", 0)
+    try:
+        gpus      = tf.config.list_physical_devices("GPU")
+        gpu_count = len(gpus)
+        gpu_names = [g.name.split(":")[-1] for g in gpus]
+    except Exception:
+        gpu_count, gpu_names = 0, []
     gpu_color  = "#2D9E6B" if gpu_count > 0 else "#94A3B8"
-    gpu_label  = ", ".join(stats.get("gpu_names", [])) if gpu_count else "None detected"
+    gpu_label  = ", ".join(gpu_names) if gpu_count else "None detected"
     gpu_status = "Training will use GPU" if gpu_count else "Training will use CPU"
     st.markdown(
         f'<div style="background:white;border-radius:10px;padding:0.75rem 1.25rem;'
@@ -376,3 +506,6 @@ def render_dashboard():
         f'</div>',
         unsafe_allow_html=True,
     )
+
+    st.divider()
+    _drift_panel()

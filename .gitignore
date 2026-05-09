@@ -18,10 +18,14 @@ models/**/*.h5
 data/raw/
 !data/raw/.gitkeep
 data/splits/
+data/features/*.npy
 
 # Outputs
 outputs/*.html
 outputs/*.png
+outputs/inference_log.jsonl
+outputs/Training*/
+outputs/training_curves/
 
 # IDE & OS
 .vscode/
@@ -31,3 +35,11 @@ Thumbs.db
 
 # Streamlit
 .streamlit/
+streamlit_err.txt
+streamlit_out.txt
+
+# Git worktrees (checked out inside project dir)
+Madomasi/
+
+# Claude Code
+.claude/
