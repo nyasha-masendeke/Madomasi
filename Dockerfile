@@ -29,8 +29,11 @@ COPY src/ ./src/
 # Create mount-point directories (populated by docker-compose volumes)
 RUN mkdir -p data models outputs
 
-# Streamlit headless config
-COPY .streamlit/ ./.streamlit/
+# Configure Streamlit via ENV — .streamlit/ is gitignored so not available after clone
+ENV STREAMLIT_SERVER_HEADLESS=true \
+    STREAMLIT_SERVER_FILE_WATCHER_TYPE=none \
+    STREAMLIT_SERVER_PORT=8501 \
+    STREAMLIT_SERVER_ADDRESS=0.0.0.0
 
 EXPOSE 8501
 
