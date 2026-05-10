@@ -1,7 +1,6 @@
 """System resource dashboard tab — CPU, RAM, disk, and usage history."""
 import json
 import platform
-import time
 from datetime import datetime
 from pathlib import Path
 
