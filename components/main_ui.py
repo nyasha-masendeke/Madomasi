@@ -308,7 +308,7 @@ def plot_learning_curves(history: dict):
     fig.update_xaxes(title_text="Epoch", gridcolor="rgba(255,255,255,0.05)", zeroline=False)
     fig.update_yaxes(gridcolor="rgba(255,255,255,0.05)", zeroline=False)
     fig.update_yaxes(range=[0, 1], row=1, col=1)
-    st.plotly_chart(fig, use_container_width=True, key="learning_curves")
+    st.plotly_chart(fig, width="stretch", key="learning_curves")
 
 
 def plot_inference_charts(log: list):
@@ -349,7 +349,7 @@ def plot_inference_charts(log: list):
     )
     fig.update_yaxes(tickformat=".0%", gridcolor="rgba(255,255,255,0.05)", row=1, col=1)
     fig.update_xaxes(title_text="Scan #", gridcolor="rgba(255,255,255,0.05)", row=1, col=1)
-    st.plotly_chart(fig, use_container_width=True, key="inference_charts")
+    st.plotly_chart(fig, width="stretch", key="inference_charts")
 
 
 # =============================================================================
@@ -483,7 +483,7 @@ def run_app():
                 img_bytes = uploaded.read()
                 uploaded.seek(0)
                 size_kb = len(img_bytes) / 1024
-                st.image(uploaded, use_container_width=True)
+                st.image(uploaded, width="stretch")
                 st.markdown(
                     f'<div class="img-meta">'
                     f'<span>&#128190; {uploaded.name}</span>'
@@ -515,7 +515,7 @@ def run_app():
             st.markdown("<div style='height:0.4rem'></div>", unsafe_allow_html=True)
             run_btn = st.button(
                 "Run Diagnosis", type="primary",
-                use_container_width=True, disabled=uploaded is None,
+                width="stretch", disabled=uploaded is None,
             )
 
             if run_btn and uploaded:
@@ -555,13 +555,13 @@ def run_app():
                 st.download_button(
                     "Export CSV", csv_bytes,
                     file_name=f"diagnosis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv", type="secondary", use_container_width=True,
+                    mime="text/csv", type="secondary", width="stretch",
                 )
 
             plot_inference_charts(log)
 
             with st.expander(f"Session Log — {len(log)} scans"):
-                st.dataframe(log_df, use_container_width=True, hide_index=True)
+                st.dataframe(log_df, width="stretch", hide_index=True)
                 if st.button("Clear Session", type="secondary"):
                     st.session_state.diagnosis_log = []
                     st.session_state.pop("last_static_result", None)
@@ -671,7 +671,7 @@ def run_app():
                 if not ratio_ok:
                     st.warning("Train + Val + Test must sum to 100%.")
                 btn_split = st.button(
-                    "Split Dataset", type="primary", use_container_width=True,
+                    "Split Dataset", type="primary", width="stretch",
                     disabled=not ratio_ok or st.session_state.get("training_active", False),
                     key="btn_split",
                 )
@@ -708,7 +708,7 @@ def run_app():
                 feat_out  = st.text_input("Features output dir", placeholder="data/features", key="feat_out")
                 feat_batch = st.select_slider("Batch size", options=[4, 8, 16, 32, 64], value=batch_size, key="feat_batch_size")
                 btn_extract = st.button(
-                    "Extract Features", type="primary", use_container_width=True,
+                    "Extract Features", type="primary", width="stretch",
                     disabled=st.session_state.get("training_active", False), key="btn_extract",
                 )
                 if feat_done:
@@ -722,7 +722,7 @@ def run_app():
                 head_epochs = st.slider("Epochs", 1, 50, 10, key="head_epochs")
                 head_lr     = st.select_slider("Learning rate", [0.0001, 0.001, 0.01, 0.1], value=0.001, key="head_lr")
                 btn_head = st.button(
-                    "Train Head", type="primary", use_container_width=True,
+                    "Train Head", type="primary", width="stretch",
                     disabled=not feat_done or st.session_state.get("training_active", False),
                     key="btn_head",
                 )
@@ -739,7 +739,7 @@ def run_app():
                 ft_epochs = st.slider("Epochs", 1, 50, 10, key="ft_epochs")
                 ft_lr     = st.select_slider("Learning rate", [0.000001, 0.00001, 0.0001], value=0.00001, key="ft_lr")
                 btn_ft = st.button(
-                    "Fine-Tune", type="primary", use_container_width=True,
+                    "Fine-Tune", type="primary", width="stretch",
                     disabled=not head_done or st.session_state.get("training_active", False),
                     key="btn_ft",
                 )
@@ -909,7 +909,7 @@ def run_app():
                         "data/splits/test", "data/splits/val",
                     ])
                 eval_test_dir = st.text_input("Test directory", placeholder="data/splits/test", key="eval_test_dir")
-                eval_btn = st.button("Evaluate", type="primary", use_container_width=True)
+                eval_btn = st.button("Evaluate", type="primary", width="stretch")
 
             with ev_c2:
                 if eval_btn:
@@ -946,7 +946,7 @@ def run_app():
             with tfl_c1:
                 tfl_model = _model_picker("Model to export", key="tfl_model")
                 tfl_out   = st.text_input("Output path", value="models/trained/model.tflite", key="tfl_out_path")
-                tfl_btn   = st.button("Export TFLite (INT8)", type="primary", use_container_width=True)
+                tfl_btn   = st.button("Export TFLite (INT8)", type="primary", width="stretch")
             with tfl_c2:
                 if tfl_btn:
                     if not bool(tfl_model) or not Path(tfl_model).exists():

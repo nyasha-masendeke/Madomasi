@@ -253,7 +253,7 @@ def _drift_panel() -> None:
         paper_bgcolor="rgba(0,0,0,0)",
         yaxis=dict(tickformat=".0%", range=[0, 1]),
     )
-    st.plotly_chart(fig, use_container_width=True, key="drift_chart")
+    st.plotly_chart(fig, width="stretch", key="drift_chart")
 
     # Drift alert based on confidence delta
     if len(df) >= 20:
@@ -284,7 +284,7 @@ def _drift_panel() -> None:
             .reset_index(name="Count")
         )
         dist["Disease"] = dist["Disease"].map(lambda x: DISEASE_DISPLAY.get(x, x))
-        st.dataframe(dist, use_container_width=True, hide_index=True)
+        st.dataframe(dist, width="stretch", hide_index=True)
 
     if st.button("Clear inference log", type="secondary", key="clear_inf_log"):
         log_path.unlink(missing_ok=True)
@@ -364,7 +364,7 @@ def _live_metrics() -> None:
 
     with g1:
         st.markdown('<div class="section-label">CPU</div>', unsafe_allow_html=True)
-        st.plotly_chart(_gauge(stats["cpu"], "CPU Usage", cpu_color), use_container_width=True, key="g_cpu")
+        st.plotly_chart(_gauge(stats["cpu"], "CPU Usage", cpu_color), width="stretch", key="g_cpu")
         max_core = stats.get("cpu_max_core", stats["cpu"])
         st.markdown(
             f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
@@ -374,7 +374,7 @@ def _live_metrics() -> None:
         )
     with g2:
         st.markdown('<div class="section-label">Memory</div>', unsafe_allow_html=True)
-        st.plotly_chart(_gauge(stats["ram"], "RAM Usage", ram_color), use_container_width=True, key="g_ram")
+        st.plotly_chart(_gauge(stats["ram"], "RAM Usage", ram_color), width="stretch", key="g_ram")
         st.markdown(
             f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
             f'{stats["ram_used_gb"]:.1f} GB used of {stats["ram_total_gb"]:.1f} GB</p>',
@@ -382,7 +382,7 @@ def _live_metrics() -> None:
         )
     with g3:
         st.markdown('<div class="section-label">Disk</div>', unsafe_allow_html=True)
-        st.plotly_chart(_gauge(stats["disk"], "Disk Usage", disk_color), use_container_width=True, key="g_disk")
+        st.plotly_chart(_gauge(stats["disk"], "Disk Usage", disk_color), width="stretch", key="g_disk")
         st.markdown(
             f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
             f'{stats["disk_used_gb"]:.1f} GB used of {stats["disk_total_gb"]:.1f} GB</p>',
@@ -419,7 +419,7 @@ def _live_metrics() -> None:
     st.markdown('<div class="section-label">Usage History (last 60 samples)</div>', unsafe_allow_html=True)
     history = st.session_state.resource_history
     if len(history) >= 2:
-        st.plotly_chart(_history_chart(history), use_container_width=True, key="history_chart")
+        st.plotly_chart(_history_chart(history), width="stretch", key="history_chart")
     else:
         st.markdown(
             """
@@ -463,7 +463,7 @@ def render_dashboard():
     # Store in session_state so the fragment can read the latest value
     st.session_state["_sys_auto_refresh"] = auto_refresh
 
-    if col_refresh.button("Refresh", type="secondary", use_container_width=True):
+    if col_refresh.button("Refresh", type="secondary", width="stretch"):
         st.rerun()
 
     st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
