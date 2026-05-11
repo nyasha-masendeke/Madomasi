@@ -12,6 +12,27 @@ import tensorflow as tf
 from plotly.subplots import make_subplots
 
 
+def _read_temp() -> float | None:
+    """Read CPU/SoC temperature. Tries Pi thermal zone first, then psutil sensors."""
+    # Raspberry Pi (and most ARM Linux boards)
+    try:
+        raw = Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()
+        return round(int(raw) / 1000, 1)
+    except Exception:
+        pass
+    # x86 Linux / macOS via psutil
+    try:
+        if hasattr(psutil, "sensors_temperatures"):
+            for _, entries in (psutil.sensors_temperatures() or {}).items():
+                for entry in entries:
+                    label = entry.label.lower()
+                    if not label or "cpu" in label or "core" in label or "temp" in label:
+                        return round(entry.current, 1)
+    except Exception:
+        pass
+    return None
+
+
 def _get_stats() -> dict:
     vm   = psutil.virtual_memory()
     disk = psutil.disk_usage("C:\\" if platform.system() == "Windows" else "/")
@@ -39,16 +60,8 @@ def _get_stats() -> dict:
         "python": platform.python_version(),
         "machine": platform.machine(),
         "timestamp": datetime.now().strftime("%H:%M:%S"),
+        "temp": _read_temp(),
     }
-    try:
-        if hasattr(psutil, "sensors_temperatures"):
-            for _, entries in (psutil.sensors_temperatures() or {}).items():
-                for entry in entries:
-                    if "cpu" in entry.label.lower() or "core" in entry.label.lower():
-                        stats["temp"] = round(entry.current, 1)
-                        break
-    except Exception:
-        pass
 
     # GPU detection via TensorFlow (no extra dependency)
     try:
@@ -75,12 +88,50 @@ def record_resource_sample(activity: str = "") -> None:
         "timestamp": stats["timestamp"],
         "cpu": stats["cpu"],
         "ram": stats["ram"],
+        "temp": stats.get("temp"),
         "activity": activity,
     })
     st.session_state.resource_history = st.session_state.resource_history[-60:]
     if activity:
         st.session_state.last_activity = activity
         st.session_state.last_activity_time = stats["timestamp"]
+
+
+def _temp_gauge(temp: float) -> go.Figure:
+    """Gauge for temperature in °C with Pi-specific thresholds (throttles at 80°C)."""
+    color = "#E63946" if temp > 80 else "#F4A261" if temp > 65 else "#2D9E6B"
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=temp,
+        number={"valueformat": ".1f", "suffix": "°C",
+                "font": {"size": 20, "color": "#16213E", "family": "Inter"}},
+        title={"text": "Temperature", "font": {"size": 13, "color": "#6B7280", "family": "Inter"}},
+        gauge={
+            "axis": {"range": [0, 100], "tickwidth": 1, "tickcolor": "#E2E8F0",
+                     "tickfont": {"size": 9, "color": "#94A3B8"}},
+            "bar": {"color": color, "thickness": 0.28},
+            "bgcolor": "#F8FAFC",
+            "borderwidth": 0,
+            "steps": [
+                {"range": [0,  65], "color": "#F0FFF4"},
+                {"range": [65, 80], "color": "#FFFBEB"},
+                {"range": [80, 100], "color": "#FEF2F2"},
+            ],
+            "threshold": {
+                "line": {"color": "#E63946", "width": 2},
+                "thickness": 0.75,
+                "value": 80,
+            },
+        },
+    ))
+    fig.update_layout(
+        height=220,
+        margin=dict(l=20, r=20, t=45, b=15),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={"family": "Inter"},
+    )
+    return fig
 
 
 def _gauge(value: float, title: str, color: str, suffix: str = "%") -> go.Figure:
@@ -122,15 +173,21 @@ def _history_chart(history: list) -> go.Figure:
     times = [h["timestamp"] for h in history]
     cpu   = [h["cpu"] for h in history]
     ram   = [h["ram"] for h in history]
+    temps = [h.get("temp") for h in history]
+    has_temp = any(t is not None for t in temps)
 
-    # Collect activity event timestamps for annotations
     inference_times = [h["timestamp"] for h in history if h.get("activity") == "Inference"]
     training_times  = [h["timestamp"] for h in history if h.get("activity") == "Training"]
 
+    n_cols = 3 if has_temp else 2
+    subplot_titles = ["CPU Usage Over Time", "RAM Usage Over Time"]
+    if has_temp:
+        subplot_titles.append("Temperature Over Time")
+
     fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=("CPU Usage Over Time", "RAM Usage Over Time"),
-        horizontal_spacing=0.1,
+        rows=1, cols=n_cols,
+        subplot_titles=subplot_titles,
+        horizontal_spacing=0.08,
     )
 
     fig.add_trace(go.Scatter(
@@ -146,11 +203,26 @@ def _history_chart(history: list) -> go.Figure:
         fillcolor="rgba(99,102,241,0.08)",
     ), row=1, col=2)
 
+    if has_temp:
+        temp_vals = [t if t is not None else None for t in temps]
+        fig.add_trace(go.Scatter(
+            x=times, y=temp_vals, mode="lines", fill="tozeroy",
+            name="Temp °C",
+            line=dict(color="#F4A261", width=2),
+            fillcolor="rgba(244,162,97,0.08)",
+            connectgaps=True,
+        ), row=1, col=3)
+        fig.add_hline(y=80, line_dash="dash", line_color="#E63946",
+                      annotation_text="Throttle 80°C",
+                      annotation_font_size=9,
+                      row=1, col=3)
+        fig.update_yaxes(range=[0, 100], gridcolor="#F1F5F9", zeroline=False, row=1, col=3)
+
     # Inference markers
     if inference_times:
-        inf_cpu = [cpu[times.index(t)] for t in inference_times if t in times]
-        inf_ram = [ram[times.index(t)] for t in inference_times if t in times]
         inf_t   = [t for t in inference_times if t in times]
+        inf_cpu = [cpu[times.index(t)] for t in inf_t]
+        inf_ram = [ram[times.index(t)] for t in inf_t]
         fig.add_trace(go.Scatter(
             x=inf_t, y=inf_cpu, mode="markers", name="Inference",
             marker=dict(color="#F59E0B", size=9, symbol="diamond",
@@ -165,9 +237,9 @@ def _history_chart(history: list) -> go.Figure:
 
     # Training markers
     if training_times:
-        trn_cpu = [cpu[times.index(t)] for t in training_times if t in times]
-        trn_ram = [ram[times.index(t)] for t in training_times if t in times]
         trn_t   = [t for t in training_times if t in times]
+        trn_cpu = [cpu[times.index(t)] for t in trn_t]
+        trn_ram = [ram[times.index(t)] for t in trn_t]
         fig.add_trace(go.Scatter(
             x=trn_t, y=trn_cpu, mode="markers", name="Training",
             marker=dict(color="#8B5CF6", size=9, symbol="star",
@@ -180,7 +252,8 @@ def _history_chart(history: list) -> go.Figure:
             showlegend=False,
         ), row=1, col=2)
 
-    fig.update_yaxes(range=[0, 100], gridcolor="#F1F5F9", zeroline=False)
+    fig.update_yaxes(range=[0, 100], gridcolor="#F1F5F9", zeroline=False, row=1, col=1)
+    fig.update_yaxes(range=[0, 100], gridcolor="#F1F5F9", zeroline=False, row=1, col=2)
     fig.update_xaxes(gridcolor="#F1F5F9", zeroline=False, tickangle=-30,
                      tickfont=dict(size=9))
     fig.update_layout(
@@ -311,6 +384,7 @@ def _live_metrics() -> None:
         "timestamp": stats["timestamp"],
         "cpu": stats["cpu"],
         "ram": stats["ram"],
+        "temp": stats.get("temp"),
         "activity": "",
     })
     st.session_state.resource_history = st.session_state.resource_history[-60:]
@@ -356,7 +430,8 @@ def _live_metrics() -> None:
         )
 
     # ── Gauges ────────────────────────────────────────────────────────
-    g1, g2, g3 = st.columns(3)
+    temp = stats.get("temp")
+    g1, g2, g3, g4 = st.columns(4)
 
     cpu_color  = "#E63946" if stats["cpu"]  > 80 else "#F4A261" if stats["cpu"]  > 60 else "#2D9E6B"
     ram_color  = "#E63946" if stats["ram"]  > 80 else "#F4A261" if stats["ram"]  > 60 else "#6366F1"
@@ -388,22 +463,24 @@ def _live_metrics() -> None:
             f'{stats["disk_used_gb"]:.1f} GB used of {stats["disk_total_gb"]:.1f} GB</p>',
             unsafe_allow_html=True,
         )
-
-    # Temperature
-    if stats.get("temp"):
-        temp = stats["temp"]
-        temp_color = "#E63946" if temp > 80 else "#F4A261" if temp > 65 else "#2D9E6B"
-        st.markdown(
-            f'<div style="background:white;border-radius:10px;padding:0.75rem 1.25rem;'
-            f'display:inline-flex;align-items:center;gap:10px;'
-            f'box-shadow:0 1px 4px rgba(0,0,0,0.06);border:1px solid #EEF0F2;">'
-            f'<span style="font-size:1.2rem;">🌡️</span>'
-            f'<span style="color:#6B7280;font-size:0.85rem;">CPU Temperature:</span>'
-            f'<span style="color:{temp_color};font-weight:700;font-size:1rem;">{temp}°C</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown("<div style='height:0.75rem'></div>", unsafe_allow_html=True)
+    with g4:
+        st.markdown('<div class="section-label">Temperature</div>', unsafe_allow_html=True)
+        if temp is not None:
+            st.plotly_chart(_temp_gauge(temp), width="stretch", key="g_temp")
+            throttle_margin = 80 - temp
+            st.markdown(
+                f'<p style="text-align:center;color:#6B7280;font-size:0.78rem;margin-top:-12px;">'
+                f'SoC &nbsp;·&nbsp; throttle at 80°C'
+                f'<br>Headroom: <b style="color:#16213E">{throttle_margin:.0f}°C</b></p>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                '<div style="height:220px;display:flex;align-items:center;justify-content:center;'
+                'color:#CBD5E0;font-size:0.8rem;text-align:center;">'
+                '🌡️<br>No sensor<br>detected</div>',
+                unsafe_allow_html=True,
+            )
 
     # Alerts
     if stats["cpu"] > 85:
@@ -412,6 +489,10 @@ def _live_metrics() -> None:
         st.error("High memory usage — consider closing other applications.", icon="⚠️")
     elif stats["ram"] > 75:
         st.warning("Memory usage above 75%.", icon="⚠️")
+    if temp is not None and temp > 80:
+        st.error(f"Temperature critical: {temp}°C — Pi is throttling! Check airflow.", icon="🌡️")
+    elif temp is not None and temp > 70:
+        st.warning(f"Temperature elevated: {temp}°C — approaching throttle limit.", icon="🌡️")
 
     st.divider()
 
