@@ -471,37 +471,70 @@ def run_app():
                 )
         st.markdown("<div style='height:0.25rem'></div>", unsafe_allow_html=True)
 
+        # ── Input mode toggle ─────────────────────────────────────────────
+        input_mode = st.radio(
+            "Input mode", ["📁 Upload Image", "📷 Live Camera"],
+            horizontal=True, label_visibility="collapsed",
+            key="input_mode",
+        )
+        if st.session_state.get("_last_input_mode") != input_mode:
+            st.session_state.pop("last_static_result", None)
+            st.session_state["_last_input_mode"] = input_mode
+
         col_upload, col_result = st.columns([1, 1], gap="large")
 
+        # resolve the active image source (file-like or None)
+        source = None
+
         with col_upload:
-            st.markdown('<div class="section-label">Upload Leaf Image</div>', unsafe_allow_html=True)
-            uploaded = st.file_uploader(
-                "upload", type=["jpg", "jpeg", "png"],
-                label_visibility="collapsed",
-            )
-            if uploaded:
-                img_bytes = uploaded.read()
-                uploaded.seek(0)
-                size_kb = len(img_bytes) / 1024
-                st.image(uploaded, width="stretch")
-                st.markdown(
-                    f'<div class="img-meta">'
-                    f'<span>&#128190; {uploaded.name}</span>'
-                    f'<span>{size_kb:.0f} KB</span>'
-                    f'<span>{uploaded.type}</span>'
-                    f'</div>',
-                    unsafe_allow_html=True,
+            if input_mode == "📷 Live Camera":
+                st.markdown('<div class="section-label">Live Camera</div>', unsafe_allow_html=True)
+                camera_image = st.camera_input(
+                    "Point camera at a tomato leaf then press the capture button",
+                    label_visibility="collapsed",
                 )
-                if size_kb < 5:
-                    st.warning("Image is very small — prediction quality may be low.")
+                if camera_image:
+                    size_kb = len(camera_image.getvalue()) / 1024
+                    st.caption(f"📷 Captured &nbsp;·&nbsp; {size_kb:.0f} KB")
+                    source = camera_image
+                else:
+                    st.session_state.pop("last_static_result", None)
+                    _html("""
+                    <div class="empty-state">
+                        <span class="empty-state-icon">📷</span>
+                        <div class="empty-state-title">Camera ready</div>
+                        <div class="empty-state-sub">Click the capture button to take a photo</div>
+                    </div>""")
             else:
-                st.session_state.pop("last_static_result", None)
-                _html("""
-                <div class="empty-state">
-                    <span class="empty-state-icon">🌿</span>
-                    <div class="empty-state-title">No image selected</div>
-                    <div class="empty-state-sub">JPG or PNG · up to 200 MB</div>
-                </div>""")
+                st.markdown('<div class="section-label">Upload Leaf Image</div>', unsafe_allow_html=True)
+                uploaded = st.file_uploader(
+                    "upload", type=["jpg", "jpeg", "png"],
+                    label_visibility="collapsed",
+                )
+                if uploaded:
+                    img_bytes = uploaded.read()
+                    uploaded.seek(0)
+                    size_kb = len(img_bytes) / 1024
+                    st.image(uploaded, width="stretch")
+                    st.markdown(
+                        f'<div class="img-meta">'
+                        f'<span>&#128190; {uploaded.name}</span>'
+                        f'<span>{size_kb:.0f} KB</span>'
+                        f'<span>{uploaded.type}</span>'
+                        f'</div>',
+                        unsafe_allow_html=True,
+                    )
+                    if size_kb < 5:
+                        st.warning("Image is very small — prediction quality may be low.")
+                    source = uploaded
+                else:
+                    st.session_state.pop("last_static_result", None)
+                    _html("""
+                    <div class="empty-state">
+                        <span class="empty-state-icon">🌿</span>
+                        <div class="empty-state-title">No image selected</div>
+                        <div class="empty-state-sub">JPG or PNG · up to 200 MB</div>
+                    </div>""")
 
         with col_result:
             st.markdown('<div class="section-label">Model & Diagnosis</div>', unsafe_allow_html=True)
@@ -513,31 +546,33 @@ def run_app():
                 c_info.markdown(info_html, unsafe_allow_html=True)
 
             st.markdown("<div style='height:0.4rem'></div>", unsafe_allow_html=True)
+            btn_label = "📷 Capture & Diagnose" if input_mode == "📷 Live Camera" else "Run Diagnosis"
             run_btn = st.button(
-                "Run Diagnosis", type="primary",
-                width="stretch", disabled=uploaded is None,
+                btn_label, type="primary",
+                width="stretch", disabled=source is None,
             )
 
-            if run_btn and uploaded:
+            if run_btn and source is not None:
                 if not model_path or not Path(model_path).exists():
                     st.error("No model found. Train a model first or enter a valid path.")
                 else:
                     with st.spinner("Analysing leaf…"):
-                        uploaded.seek(0)
-                        result = _run_inference(uploaded, model_path, confidence)
+                        if hasattr(source, "seek"):
+                            source.seek(0)
+                        result = _run_inference(source, model_path, confidence)
                         if result:
                             st.session_state["last_static_result"] = result
                             st.rerun()
 
             last_result = st.session_state.get("last_static_result")
-            if last_result and uploaded is not None:
+            if last_result and source is not None:
                 _diagnosis_card(last_result)
-            elif uploaded is not None:
+            elif source is not None:
                 _html("""
                 <div class="empty-state" style="margin-top:1rem;">
                     <span class="empty-state-icon">🔬</span>
                     <div class="empty-state-title">Ready to analyse</div>
-                    <div class="empty-state-sub">Click Run Diagnosis to classify this leaf</div>
+                    <div class="empty-state-sub">Click the button above to classify this leaf</div>
                 </div>""")
 
         # ── Inference Analytics ───────────────────────────────────────────
