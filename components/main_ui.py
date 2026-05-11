@@ -29,9 +29,7 @@ from streamlit_callback import StreamlitTrainCallback
 
 def _load_latest_history() -> dict:
     import json as _json
-    # Resolve to E:\Madomasi\outputs regardless of which worktree the server runs from
-    main_outputs = Path(__file__).parents[4] / "outputs"
-    base = main_outputs if main_outputs.exists() else Path("outputs")
+    base = Path("outputs")
     if not base.exists():
         return {}
     dirs = sorted(
