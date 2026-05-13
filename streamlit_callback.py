@@ -145,4 +145,4 @@ class StreamlitTrainCallback(tf.keras.callbacks.Callback):
         fig.update_yaxes(title_text="Score", gridcolor="#EEEEEE", range=[0, 1], row=1, col=1)
         fig.update_yaxes(title_text="Loss", gridcolor="#EEEEEE", row=1, col=2)
 
-        self.chart.plotly_chart(fig, use_container_width=True)
+        self.chart.plotly_chart(fig, width="stretch")
