@@ -18,7 +18,7 @@ PROJECT_ROOT = Path(_config_module.__file__).parent
 from pipeline import (
     predict_image, evaluate_model,
     extract_features, train_head, fine_tune_model, split_dataset, log_inference,
-    check_class_balance, compute_tsne,
+    check_class_balance, compute_tsne, compute_gradcam,
 )
 from src.utils.recommendations import get_recommendation
 from streamlit_callback import StreamlitTrainCallback
@@ -438,6 +438,16 @@ def _run_inference(img_bytes_or_file, model_path: str, confidence: float) -> dic
         load_cached_model(model_path)
         src = BytesIO(img_bytes_or_file) if isinstance(img_bytes_or_file, bytes) else img_bytes_or_file
         result = predict_image(model_path, src, confidence / 100)
+        # Persist raw bytes so Grad-CAM can reuse the same image
+        try:
+            st.session_state["last_img_bytes"] = (
+                img_bytes_or_file if isinstance(img_bytes_or_file, bytes)
+                else img_bytes_or_file.getvalue()
+            )
+            st.session_state["last_model_path"] = model_path
+        except Exception:
+            pass
+        st.session_state.pop("gradcam_result", None)  # clear stale heatmap
         record_resource_sample("Inference")
         log_inference(result["disease"], result["confidence"], Path(model_path).name,
                       entropy=result.get("entropy"), is_leaf=result.get("is_leaf"))
@@ -639,6 +649,26 @@ def _render_model_comparison() -> None:
 # =============================================================================
 # EVALUATION HELPERS
 # =============================================================================
+
+def _render_gradcam(gradcam: dict) -> None:
+    dname = DISEASE_DISPLAY.get(gradcam["class_name"], gradcam["class_name"])
+    st.markdown("#### Grad-CAM — What the model is looking at")
+    st.caption(
+        f"Target class: **{dname}** · confidence {gradcam['confidence']:.1%} · "
+        f"layer `{gradcam['layer_name']}`"
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(gradcam["original_png"], caption="Original image", use_container_width=True)
+    with col2:
+        st.image(gradcam["overlay_png"],  caption="Grad-CAM overlay", use_container_width=True)
+    st.caption(
+        "🔴 Red/warm = high activation (model focuses here)  ·  "
+        "🔵 Blue/cool = low activation. "
+        "Activations should concentrate on leaf lesions — if they land on soil or background "
+        "the model may be using spurious correlations."
+    )
+
 
 def _render_confusion_matrix(ev: dict) -> None:
     """Interactive Plotly confusion matrix heatmap + per-class metrics table."""
@@ -898,6 +928,22 @@ def run_app():
             last_result = st.session_state.get("last_static_result")
             if last_result and source is not None:
                 _diagnosis_card(last_result)
+                # Grad-CAM — only for .keras models (TFLite has no gradient support)
+                _mpath = st.session_state.get("last_model_path", "")
+                if last_result.get("is_leaf", True) and _mpath.endswith(".keras"):
+                    if st.button("🔍 Explain with Grad-CAM", key="btn_gradcam", type="secondary"):
+                        _ibytes = st.session_state.get("last_img_bytes")
+                        if _ibytes:
+                            with st.spinner("Computing Grad-CAM gradients…"):
+                                try:
+                                    st.session_state["gradcam_result"] = compute_gradcam(
+                                        _mpath, _ibytes,
+                                        class_idx=last_result.get("class_idx"),
+                                    )
+                                except Exception as _e:
+                                    st.error(f"Grad-CAM failed: {_e}")
+                if st.session_state.get("gradcam_result"):
+                    _render_gradcam(st.session_state["gradcam_result"])
             elif source is not None:
                 _html("""
                 <div class="empty-state" style="margin-top:1rem;">

@@ -257,6 +257,7 @@ def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5
 
     return {
         "disease": class_name(class_idx),
+        "class_idx": int(class_idx),
         "confidence": confidence,
         "passes_threshold": confidence >= confidence_threshold,
         "all_probs": {class_name(i): float(p) for i, p in enumerate(preds)},
@@ -311,6 +312,79 @@ def evaluate_model(model_path: str, test_dir: str, batch_size: int = 16):
         "confusion_matrix": cm,
         "class_names": class_names,
         "report": report,
+    }
+
+
+def compute_gradcam(model_path: str, img_bytes: bytes, class_idx: int | None = None) -> dict:
+    """Grad-CAM: gradient-weighted heatmap overlaid on the input image.
+
+    Returns overlay and original as raw PNG bytes so callers can pass
+    directly to st.image without base64 encoding overhead.
+    """
+    import cv2
+    import io as _io
+
+    model = tf.keras.models.load_model(model_path)
+
+    # Find last layer with spatial (4D) output — skip InputLayer
+    last_conv_layer = None
+    for layer in model.layers:
+        if isinstance(layer, tf.keras.layers.InputLayer):
+            continue
+        try:
+            if len(layer.output.shape) == 4:
+                last_conv_layer = layer
+        except Exception:
+            pass
+    if last_conv_layer is None:
+        raise ValueError("No spatial convolutional layer found in model.")
+
+    grad_model = tf.keras.models.Model(
+        inputs=model.inputs,
+        outputs=[last_conv_layer.output, model.output],
+    )
+
+    # Preprocess (identical to predict_image)
+    original_img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
+    img_resized  = original_img.resize(IMAGE_SIZE, Image.BILINEAR)
+    arr = np.expand_dims(np.array(img_resized, dtype=np.float32), axis=0)
+
+    # Forward pass + gradient
+    with tf.GradientTape() as tape:
+        conv_outputs, predictions = grad_model(arr)
+        if class_idx is None:
+            class_idx = int(tf.argmax(predictions[0]))
+        loss = predictions[:, class_idx]
+
+    grads = tape.gradient(loss, conv_outputs)          # (1, H, W, C)
+    pooled = tf.reduce_mean(grads, axis=(0, 1, 2))     # (C,)
+    heatmap = tf.einsum("hwc,c->hw", conv_outputs[0], pooled)
+    heatmap = tf.maximum(heatmap, 0)
+    heatmap = (heatmap / (tf.reduce_max(heatmap) + 1e-8)).numpy()
+
+    # Resize to image size and apply JET colormap
+    h, w = IMAGE_SIZE
+    heatmap_up = cv2.resize(heatmap, (w, h))
+    colored    = cv2.applyColorMap(np.uint8(255 * heatmap_up), cv2.COLORMAP_JET)
+    colored_rgb = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
+
+    # Blend with original (55 % image, 45 % heatmap)
+    orig_arr = np.array(img_resized, dtype=np.float32)
+    overlay  = np.uint8(0.45 * colored_rgb.astype(np.float32) + 0.55 * orig_arr)
+
+    def _to_png(arr: np.ndarray) -> bytes:
+        buf = _io.BytesIO()
+        Image.fromarray(arr).save(buf, format="PNG")
+        return buf.getvalue()
+
+    cname = DISEASE_CLASSES[class_idx] if class_idx < len(DISEASE_CLASSES) else f"Class {class_idx}"
+    return {
+        "overlay_png":  _to_png(overlay),
+        "original_png": _to_png(np.array(img_resized)),
+        "class_name":   cname,
+        "class_idx":    int(class_idx),
+        "confidence":   float(predictions[0, class_idx]),
+        "layer_name":   last_conv_layer.name,
     }
 
 
