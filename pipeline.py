@@ -326,38 +326,34 @@ def compute_gradcam(model_path: str, img_bytes: bytes, class_idx: int | None = N
 
     model = tf.keras.models.load_model(model_path)
 
-    # Find last layer with spatial (4D) output — skip InputLayer
-    last_conv_layer = None
-    for layer in model.layers:
-        if isinstance(layer, tf.keras.layers.InputLayer):
-            continue
-        try:
-            if len(layer.output.shape) == 4:
-                last_conv_layer = layer
-        except Exception:
-            pass
-    if last_conv_layer is None:
-        raise ValueError("No spatial convolutional layer found in model.")
-
-    grad_model = tf.keras.models.Model(
-        inputs=model.inputs,
-        outputs=[last_conv_layer.output, model.output],
-    )
+    # In Keras 3 the model has two nested Functional sub-models:
+    #   layers[1] = MobileNetV3Small backbone  → (batch, 7, 7, 576)
+    #   layers[2] = head (GAP + Dropout + Dense) → (batch, 10)
+    # We cannot build a new Model() from their outputs because the tensors
+    # are not connected to the outer model's inputs (Keras 3 graph isolation).
+    # Instead we split the forward pass manually and watch the feature-map
+    # tensor with the gradient tape — this is the recommended Keras 3 pattern.
+    sub_models = [l for l in model.layers if isinstance(l, tf.keras.Model)]
+    if len(sub_models) < 2:
+        raise ValueError("Expected backbone + head sub-models; got unexpected architecture.")
+    backbone, head = sub_models[0], sub_models[1]
 
     # Preprocess (identical to predict_image)
     original_img = Image.open(_io.BytesIO(img_bytes)).convert("RGB")
     img_resized  = original_img.resize(IMAGE_SIZE, Image.BILINEAR)
     arr = np.expand_dims(np.array(img_resized, dtype=np.float32), axis=0)
 
-    # Forward pass + gradient
+    # Forward pass: backbone → watch feature maps → head → gradient
     with tf.GradientTape() as tape:
-        conv_outputs, predictions = grad_model(arr)
+        conv_outputs = backbone(arr, training=False)       # (1, 7, 7, 576)
+        tape.watch(conv_outputs)
+        predictions  = head(conv_outputs, training=False)  # (1, 10)
         if class_idx is None:
             class_idx = int(tf.argmax(predictions[0]))
         loss = predictions[:, class_idx]
 
-    grads = tape.gradient(loss, conv_outputs)          # (1, H, W, C)
-    pooled = tf.reduce_mean(grads, axis=(0, 1, 2))     # (C,)
+    grads = tape.gradient(loss, conv_outputs)          # (1, 7, 7, 576)
+    pooled = tf.reduce_mean(grads, axis=(0, 1, 2))     # (576,)
     heatmap = tf.einsum("hwc,c->hw", conv_outputs[0], pooled)
     heatmap = tf.maximum(heatmap, 0)
     heatmap = (heatmap / (tf.reduce_max(heatmap) + 1e-8)).numpy()
@@ -384,7 +380,7 @@ def compute_gradcam(model_path: str, img_bytes: bytes, class_idx: int | None = N
         "class_name":   cname,
         "class_idx":    int(class_idx),
         "confidence":   float(predictions[0, class_idx]),
-        "layer_name":   last_conv_layer.name,
+        "layer_name":   backbone.name,
     }
 
 
