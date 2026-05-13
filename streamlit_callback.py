@@ -134,6 +134,21 @@ class StreamlitTrainCallback(tf.keras.callbacks.Callback):
                 row=1, col=2,
             )
 
+        # Best-checkpoint vertical line at the epoch with lowest val_loss
+        val_loss_pairs = [
+            (e, v) for e, v in zip(epochs, self.history["val_loss"]) if v is not None
+        ]
+        if val_loss_pairs:
+            best_e, best_v = min(val_loss_pairs, key=lambda x: x[1])
+            fig.add_vline(
+                x=best_e,
+                line_dash="dot", line_color="#38A169", line_width=1.5,
+                annotation_text=f"Best (ep {best_e}, val_loss {best_v:.4f})",
+                annotation_position="top left",
+                annotation_font_color="#38A169",
+                annotation_font_size=10,
+            )
+
         fig.update_layout(
             height=380,
             template="plotly_white",

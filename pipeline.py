@@ -314,6 +314,72 @@ def evaluate_model(model_path: str, test_dir: str, batch_size: int = 16):
     }
 
 
+def check_class_balance(data_dir: str) -> dict:
+    """Count images per class and compute balanced class weights."""
+    from sklearn.utils.class_weight import compute_class_weight as _ccw
+    IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"}
+    data_path = Path(data_dir)
+    classes = sorted([p.name for p in data_path.iterdir() if p.is_dir()])
+    counts = {
+        cls: len([f for f in (data_path / cls).iterdir() if f.suffix.lower() in IMG_EXTS])
+        for cls in classes
+    }
+    total = sum(counts.values())
+    if total == 0:
+        return {"classes": classes, "counts": counts, "total": 0,
+                "weights": {}, "imbalance_ratio": 0.0, "is_imbalanced": False}
+
+    y = np.array([i for i, cls in enumerate(classes) for _ in range(counts[cls])])
+    raw_w = _ccw("balanced", classes=np.unique(y), y=y)
+    weights = {cls: float(w) for cls, w in zip(classes, raw_w)}
+
+    max_c = max(counts.values())
+    min_c = min(v for v in counts.values() if v > 0)
+    ratio = round(max_c / min_c, 2)
+    return {
+        "classes": classes, "counts": counts, "total": total,
+        "weights": weights, "imbalance_ratio": ratio, "is_imbalanced": ratio > 3.0,
+    }
+
+
+def compute_tsne(features_dir: str, n_samples: int = 1500, perplexity: int = 30) -> dict:
+    """Run t-SNE on cached MobileNetV3 feature vectors, return 2-D coords."""
+    from sklearn.manifold import TSNE
+    import json as _json
+
+    feat_path   = Path(features_dir) / "features.npy"
+    labels_path = Path(features_dir) / "labels.npy"
+    meta_path   = Path(features_dir) / "meta.json"
+
+    if not feat_path.exists() or not labels_path.exists():
+        raise FileNotFoundError(f"features.npy / labels.npy not found in {features_dir}")
+
+    features = np.load(feat_path)
+    labels   = np.load(labels_path).astype(int)
+    class_names = DISEASE_CLASSES
+    if meta_path.exists():
+        meta = _json.loads(meta_path.read_text())
+        class_names = meta.get("class_names", DISEASE_CLASSES)
+
+    n = len(features)
+    if n > n_samples:
+        rng = np.random.default_rng(42)
+        idx = rng.choice(n, n_samples, replace=False)
+        features, labels = features[idx], labels[idx]
+
+    perp = min(perplexity, max(5, len(features) // 3))
+    coords = TSNE(
+        n_components=2, perplexity=perp, random_state=42,
+        n_iter=1000, learning_rate="auto", init="pca",
+    ).fit_transform(features)
+
+    return {
+        "x": coords[:, 0].tolist(), "y": coords[:, 1].tolist(),
+        "labels": labels.tolist(), "class_names": class_names,
+        "n_samples": len(features), "n_total": n,
+    }
+
+
 def convert_model(keras_model_path: str, output_path: str):
     model = tf.keras.models.load_model(keras_model_path)
     converter = tf.lite.TFLiteConverter.from_keras_model(model)

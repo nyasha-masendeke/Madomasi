@@ -18,6 +18,7 @@ PROJECT_ROOT = Path(_config_module.__file__).parent
 from pipeline import (
     predict_image, evaluate_model,
     extract_features, train_head, fine_tune_model, split_dataset, log_inference,
+    check_class_balance, compute_tsne,
 )
 from src.utils.recommendations import get_recommendation
 from streamlit_callback import StreamlitTrainCallback
@@ -456,6 +457,183 @@ def _run_inference(img_bytes_or_file, model_path: str, confidence: float) -> dic
     except Exception as e:
         st.error(f"Inference failed: {e}")
     return None
+
+
+# =============================================================================
+# CLASS BALANCE / T-SNE / MODEL COMPARISON HELPERS
+# =============================================================================
+
+def _render_class_balance(balance: dict) -> None:
+    ratio = balance["imbalance_ratio"]
+    classes = balance["classes"]
+    counts  = balance["counts"]
+    display = [DISEASE_DISPLAY.get(c, c) for c in classes]
+    min_c   = min(counts.values())
+    max_c   = max(counts.values())
+
+    if balance["is_imbalanced"]:
+        st.warning(
+            f"Imbalance ratio {ratio:.1f}× — class weights will compensate during training.",
+            icon="⚠️",
+        )
+    else:
+        st.success(f"Classes are balanced (ratio {ratio:.1f}×).", icon="✅")
+
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.metric("Total images",    balance["total"])
+    mc2.metric("Classes",         len(classes))
+    mc3.metric("Imbalance ratio", f"{ratio:.1f}×")
+
+    colors = [
+        "#E53E3E" if counts[c] == min_c else
+        "#F4A261" if counts[c] == max_c else "#90CDF4"
+        for c in classes
+    ]
+    fig = go.Figure(go.Bar(
+        x=display, y=[counts[c] for c in classes],
+        marker_color=colors,
+        text=[counts[c] for c in classes], textposition="outside",
+        hovertemplate="%{x}<br>%{y} images<extra></extra>",
+    ))
+    mean_count = balance["total"] / max(len(classes), 1)
+    fig.add_hline(y=mean_count, line_dash="dash", line_color="#718096",
+                  annotation_text=f"Mean ({mean_count:.0f})", annotation_position="top right")
+    fig.update_layout(
+        height=280, template="plotly_white",
+        margin=dict(l=20, r=20, t=20, b=60),
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(tickangle=-30),
+        yaxis=dict(title="Images"),
+    )
+    st.plotly_chart(fig, width="stretch", key="class_balance_chart")
+    with st.expander("Class weights (used during training)"):
+        wdf = pd.DataFrame([
+            {"Class": DISEASE_DISPLAY.get(c, c), "Weight": f"{w:.3f}"}
+            for c, w in balance["weights"].items()
+        ])
+        st.dataframe(wdf, hide_index=True, width="stretch")
+        st.caption("Weight > 1 = under-represented class; model penalised more for missing it.")
+
+
+_TSNE_COLORS = [
+    "#E63946", "#F4A261", "#2EC4B6", "#457B9D", "#A8DADC",
+    "#6A4C93", "#FB8500", "#38B000", "#D62839", "#3A86FF",
+]
+
+def _render_tsne(result: dict) -> None:
+    class_names = result["class_names"]
+    x, y, labels = result["x"], result["y"], result["labels"]
+
+    fig = go.Figure()
+    for i, cls in enumerate(class_names):
+        mask = [j for j, lbl in enumerate(labels) if lbl == i]
+        if not mask:
+            continue
+        fig.add_trace(go.Scatter(
+            x=[x[j] for j in mask], y=[y[j] for j in mask],
+            mode="markers",
+            name=DISEASE_DISPLAY.get(cls, cls),
+            marker=dict(color=_TSNE_COLORS[i % len(_TSNE_COLORS)], size=5,
+                        opacity=0.75, line=dict(width=0)),
+            hovertemplate=f"{DISEASE_DISPLAY.get(cls, cls)}<extra></extra>",
+        ))
+    fig.update_layout(
+        height=480, template="plotly_white",
+        legend=dict(orientation="v", x=1.01, y=1),
+        margin=dict(l=20, r=160, t=20, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showticklabels=False, zeroline=False, showgrid=False, title="t-SNE dim 1"),
+        yaxis=dict(showticklabels=False, zeroline=False, showgrid=False, title="t-SNE dim 2"),
+    )
+    st.plotly_chart(fig, width="stretch", key="tsne_chart")
+    st.caption(
+        f"{result['n_samples']} samples plotted (of {result['n_total']} total). "
+        "Tight, well-separated clusters = the backbone has learnt discriminative features."
+    )
+
+
+def _render_model_comparison() -> None:
+    import json as _json
+    outputs_base = Path("outputs")
+    rows = []
+    for run_dir in sorted(outputs_base.glob("Training*"), key=lambda p: p.name):
+        for hist_file in sorted(run_dir.glob("history_*.json")):
+            try:
+                hist = _json.loads(hist_file.read_text())
+                val_acc  = [v for v in hist.get("val_accuracy", []) if v is not None]
+                val_loss = [v for v in hist.get("val_loss", []) if v is not None]
+                epochs   = hist.get("epoch", [])
+                best_val = max(val_acc) if val_acc else None
+                best_ep  = epochs[val_acc.index(best_val)] if best_val and epochs else None
+                rows.append({
+                    "Run":           run_dir.name,
+                    "Stage":         hist_file.stem.replace("history_", "").replace("_", " ").title(),
+                    "Epochs":        len(epochs),
+                    "Best Epoch":    best_ep or "—",
+                    "Best Val Acc":  f"{best_val:.2%}" if best_val else "—",
+                    "Final Val Acc": f"{val_acc[-1]:.2%}" if val_acc else "—",
+                    "_best_val":     best_val or 0,
+                    "_hist":         str(hist_file),
+                })
+            except Exception:
+                pass
+
+    if not rows:
+        st.info("No training runs found. Complete a training run first.", icon="📊")
+        return
+
+    rows.sort(key=lambda r: r["_best_val"], reverse=True)
+    best = rows[0]
+    rc1, rc2, rc3 = st.columns(3)
+    rc1.metric("Total runs",   len(set(r["Run"] for r in rows)))
+    rc2.metric("Best val acc", best["Best Val Acc"])
+    rc3.metric("Best run",     f"{best['Run']} / {best['Stage']}")
+
+    display_cols = ["Run", "Stage", "Epochs", "Best Epoch", "Best Val Acc", "Final Val Acc"]
+    st.dataframe([{k: r[k] for k in display_cols} for r in rows],
+                 hide_index=True, width="stretch")
+
+    with st.expander("Val accuracy comparison chart"):
+        fig = go.Figure()
+        for i, r in enumerate(rows[:8]):
+            try:
+                hist = _json.loads(Path(r["_hist"]).read_text())
+                eps  = hist.get("epoch", [])
+                va   = hist.get("val_accuracy", [])
+                if eps and va:
+                    fig.add_trace(go.Scatter(
+                        x=eps, y=va, mode="lines+markers",
+                        name=f"{r['Run']} / {r['Stage']}",
+                        line=dict(color=_TSNE_COLORS[i % len(_TSNE_COLORS)], width=2),
+                        marker=dict(size=5),
+                    ))
+            except Exception:
+                pass
+        fig.update_layout(
+            height=320, template="plotly_white", hovermode="x unified",
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            margin=dict(l=20, r=20, t=40, b=20),
+            yaxis=dict(tickformat=".0%", range=[0, 1], title="Val Accuracy"),
+            xaxis=dict(title="Epoch"),
+        )
+        st.plotly_chart(fig, width="stretch", key="model_comp_chart")
+
+    keras_files = sorted(Path("models/trained").rglob("*.keras"),
+                         key=lambda p: p.stat().st_mtime, reverse=True) \
+        if Path("models/trained").exists() else []
+    if keras_files:
+        st.divider()
+        st.caption("**Promote a model** — set it as the active model for inference and evaluation")
+        sel = st.selectbox(
+            "Model file", [str(p) for p in keras_files],
+            format_func=lambda p: f"{Path(p).name}  ({Path(p).stat().st_size / 1e6:.1f} MB)",
+            key="model_comp_select",
+        )
+        if st.button("Use this model", key="model_comp_promote", type="primary"):
+            st.session_state["eval_model"]  = sel
+            st.session_state["model_path"]  = sel
+            st.session_state["tfl_model"]   = sel
+            st.success(f"Active model set to `{Path(sel).name}`")
 
 
 # =============================================================================
@@ -901,6 +1079,21 @@ def run_app():
                 )
                 if feat_done:
                     st.caption(f"Features: `{st.session_state.features_dir}`")
+                    if st.button("Visualise Feature Space (t-SNE)", key="btn_tsne", type="secondary"):
+                        with st.spinner("Running t-SNE — this takes ~30 s for 1 500 samples…"):
+                            try:
+                                st.session_state.tsne_result = compute_tsne(
+                                    st.session_state.features_dir
+                                )
+                            except Exception as _e:
+                                st.error(f"t-SNE failed: {_e}")
+                    if st.session_state.get("tsne_result"):
+                        _render_tsne(st.session_state.tsne_result)
+
+                if st.session_state.get("class_balance") and not feat_done:
+                    st.divider()
+                    st.caption("**Training data balance check**")
+                    _render_class_balance(st.session_state.class_balance)
 
             # ── Stage 2 — Train Head
             with st.expander(
@@ -1017,6 +1210,10 @@ def run_app():
                     st.session_state.split_val_dir   = result["val_dir"]
                     st.session_state.split_test_dir  = result["test_dir"]
                     st.session_state.pop("shared_data_dir", None)
+                    try:
+                        st.session_state.class_balance = check_class_balance(result["train_dir"])
+                    except Exception:
+                        pass
                     progress_bar.progress(1.0, text="Split complete")
                     c = result["counts"]
                     st.success(
@@ -1155,6 +1352,10 @@ def run_app():
                                 st.success(f"Exported → `{out}` ({size_mb:.1f} MB)")
                             except Exception as e:
                                 st.error(f"Export failed: {e}")
+
+        # ── Model Comparison ──────────────────────────────────────────────
+        with st.expander("📊 Training Runs — Model Comparison", expanded=False):
+            _render_model_comparison()
 
     # =========================================================================
     # SYSTEM DASHBOARD TAB
