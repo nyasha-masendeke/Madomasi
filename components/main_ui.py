@@ -546,7 +546,24 @@ def run_app():
                 c_info.markdown(info_html, unsafe_allow_html=True)
 
             st.markdown("<div style='height:0.4rem'></div>", unsafe_allow_html=True)
-            btn_label = "📷 Capture & Diagnose" if input_mode == "📷 Live Camera" else "Run Diagnosis"
+
+            # Auto-diagnose in camera mode as soon as a new photo is captured
+            if input_mode == "📷 Live Camera" and source is not None:
+                import hashlib
+                img_hash = hashlib.md5(source.getvalue()).hexdigest()
+                source.seek(0)
+                if st.session_state.get("_cam_auto_hash") != img_hash:
+                    st.session_state["_cam_auto_hash"] = img_hash
+                    if not model_path or not Path(model_path).exists():
+                        st.error("No model found. Train a model first or enter a valid path.")
+                    else:
+                        with st.spinner("Analysing leaf…"):
+                            result = _run_inference(source, model_path, confidence)
+                            if result:
+                                st.session_state["last_static_result"] = result
+                                st.rerun()
+
+            btn_label = "📷 Re-diagnose" if input_mode == "📷 Live Camera" else "Run Diagnosis"
             run_btn = st.button(
                 btn_label, type="primary",
                 width="stretch", disabled=source is None,
