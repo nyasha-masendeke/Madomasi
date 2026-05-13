@@ -459,6 +459,74 @@ def _run_inference(img_bytes_or_file, model_path: str, confidence: float) -> dic
 
 
 # =============================================================================
+# EVALUATION HELPERS
+# =============================================================================
+
+def _render_confusion_matrix(ev: dict) -> None:
+    """Interactive Plotly confusion matrix heatmap + per-class metrics table."""
+    import numpy as _np
+
+    cm = _np.array(ev["confusion_matrix"])
+    raw_names = ev["class_names"]
+    display_names = [DISEASE_DISPLAY.get(n, n) for n in raw_names]
+    report = ev.get("report", {})
+
+    st.markdown("#### Confusion Matrix")
+
+    # Normalise each row to 0–1 so colour shows recall regardless of class size
+    row_sums = cm.sum(axis=1, keepdims=True).clip(min=1)
+    cm_norm = (cm / row_sums * 100).round(1)          # percent of actual class
+
+    # Build hover text: "Actual X → Predicted Y: N images (Z%)"
+    hover = [[
+        f"Actual: {display_names[r]}<br>"
+        f"Predicted: {display_names[c]}<br>"
+        f"{cm[r, c]} image(s) ({cm_norm[r, c]:.1f}%)"
+        for c in range(len(display_names))]
+        for r in range(len(display_names))
+    ]
+
+    fig = go.Figure(go.Heatmap(
+        z=cm_norm,
+        x=display_names,
+        y=display_names,
+        text=cm,                           # raw counts on cells
+        texttemplate="%{text}",
+        hoverinfo="text",
+        hovertext=hover,
+        colorscale="Blues",
+        showscale=True,
+        colorbar=dict(title="Recall %", ticksuffix="%"),
+        zmin=0, zmax=100,
+    ))
+    fig.update_layout(
+        height=520,
+        template="plotly_white",
+        xaxis=dict(title="Predicted", tickangle=-35, side="bottom"),
+        yaxis=dict(title="Actual", autorange="reversed"),
+        margin=dict(l=20, r=20, t=20, b=80),
+        paper_bgcolor="rgba(0,0,0,0)",
+    )
+    st.plotly_chart(fig, width="stretch", key="cm_heatmap")
+    st.caption("Cell values = raw count. Colour intensity = recall % (row-normalised).")
+
+    # Per-class metrics table
+    if report:
+        rows = []
+        for name, dname in zip(raw_names, display_names):
+            r = report.get(name, {})
+            rows.append({
+                "Disease":   dname,
+                "Precision": f"{r.get('precision', 0):.1%}",
+                "Recall":    f"{r.get('recall', 0):.1%}",
+                "F1":        f"{r.get('f1-score', 0):.1%}",
+                "Support":   int(r.get("support", 0)),
+            })
+        with st.expander("Per-class metrics (Precision / Recall / F1)"):
+            st.dataframe(rows, hide_index=True, width="stretch")
+
+
+# =============================================================================
 # TRAINING HELPERS
 # =============================================================================
 
@@ -1058,6 +1126,12 @@ def run_app():
                         "Needs improvement — increase epochs or data."
                     )
                     st.caption(verdict)
+
+            # ── Confusion matrix (full-width, outside the 2-col layout) ──────
+            if st.session_state.get("eval_result"):
+                ev = st.session_state.eval_result
+                if "confusion_matrix" in ev:
+                    _render_confusion_matrix(ev)
 
         # ── TFLite Export ─────────────────────────────────────────────────
         tfl_done = bool(st.session_state.get("tfl_exported"))

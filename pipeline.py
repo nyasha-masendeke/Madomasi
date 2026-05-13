@@ -266,11 +266,8 @@ def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5
 
 
 def evaluate_model(model_path: str, test_dir: str, batch_size: int = 16):
+    from sklearn.metrics import confusion_matrix, classification_report
     model = tf.keras.models.load_model(model_path)
-    # Compile is needed when the model was assembled (e.g. head_full) but not
-    # compiled before saving — compile here with the same settings used for fine-tuning.
-    # Always compile — harmless if already compiled, required for models
-    # saved without an optimizer (e.g. head_full assembled in train_head).
     model.compile(
         optimizer=tf.keras.optimizers.Adam(),
         loss="sparse_categorical_crossentropy",
@@ -285,7 +282,36 @@ def evaluate_model(model_path: str, test_dir: str, batch_size: int = 16):
     ).prefetch(tf.data.AUTOTUNE)
 
     loss, accuracy = model.evaluate(test_ds, verbose=0)
-    return {"loss": loss, "accuracy": accuracy}
+
+    # Collect all labels and predictions for confusion matrix
+    y_true, y_pred = [], []
+    for images, labels in test_ds:
+        preds = model.predict(images, verbose=0)
+        y_pred.extend(np.argmax(preds, axis=1).tolist())
+        y_true.extend(labels.numpy().tolist())
+
+    # Map indices to class names present in the test set
+    class_names_raw = sorted(
+        [p.name for p in Path(test_dir).iterdir() if p.is_dir()]
+    )
+    class_names = [DISEASE_CLASSES[i] if i < len(DISEASE_CLASSES) else n
+                   for i, n in enumerate(class_names_raw)]
+
+    cm = confusion_matrix(y_true, y_pred).tolist()
+    report = classification_report(
+        y_true, y_pred,
+        target_names=class_names,
+        output_dict=True,
+        zero_division=0,
+    )
+
+    return {
+        "loss": loss,
+        "accuracy": accuracy,
+        "confusion_matrix": cm,
+        "class_names": class_names,
+        "report": report,
+    }
 
 
 def convert_model(keras_model_path: str, output_path: str):
