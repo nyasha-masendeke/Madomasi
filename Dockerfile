@@ -3,16 +3,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# System libraries required by OpenCV and WebRTC/av
+# System libraries required by opencv-python-headless and TensorFlow
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+        libgl1 \
         libglib2.0-0 \
-        libgl1-mesa-glx \
         libgomp1 \
-        libsm6 \
-        libxext6 \
-        libxrender-dev \
-        libgstreamer1.0-0 \
-        ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
