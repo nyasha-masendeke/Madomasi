@@ -32,17 +32,23 @@ def _next_training_output_dir() -> Path:
     return d
 
 
-def log_inference(disease: str, confidence: float, model_name: str) -> None:
+def log_inference(disease: str, confidence: float, model_name: str,
+                  entropy: float | None = None, is_leaf: bool | None = None) -> None:
     """Append one prediction to outputs/inference_log.jsonl for drift monitoring."""
     log_path = Path("outputs/inference_log.jsonl")
     log_path.parent.mkdir(exist_ok=True)
+    entry: dict = {
+        "ts":         datetime.now().isoformat(),
+        "disease":    disease,
+        "confidence": round(float(confidence), 4),
+        "model":      model_name,
+    }
+    if entropy is not None:
+        entry["entropy"] = round(float(entropy), 4)
+    if is_leaf is not None:
+        entry["is_leaf"] = bool(is_leaf)
     with open(log_path, "a") as f:
-        f.write(json.dumps({
-            "ts":         datetime.now().isoformat(),
-            "disease":    disease,
-            "confidence": round(float(confidence), 4),
-            "model":      model_name,
-        }) + "\n")
+        f.write(json.dumps(entry) + "\n")
 
 
 def load_datasets(data_dir: str, batch_size: int, val_split: float = 0.2):

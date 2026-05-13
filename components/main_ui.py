@@ -438,7 +438,8 @@ def _run_inference(img_bytes_or_file, model_path: str, confidence: float) -> dic
         src = BytesIO(img_bytes_or_file) if isinstance(img_bytes_or_file, bytes) else img_bytes_or_file
         result = predict_image(model_path, src, confidence / 100)
         record_resource_sample("Inference")
-        log_inference(result["disease"], result["confidence"], Path(model_path).name)
+        log_inference(result["disease"], result["confidence"], Path(model_path).name,
+                      entropy=result.get("entropy"), is_leaf=result.get("is_leaf"))
         st.session_state.scans = st.session_state.get("scans", 0) + 1
         if "healthy" not in result["disease"].lower():
             st.session_state.diseases = st.session_state.get("diseases", 0) + 1

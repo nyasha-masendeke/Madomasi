@@ -4,6 +4,7 @@ import platform
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import psutil
@@ -292,16 +293,222 @@ def _history_chart(history: list) -> go.Figure:
     return fig
 
 
+def _render_confidence_drift(df: pd.DataFrame, baseline_df: pd.DataFrame, recent_df: pd.DataFrame) -> None:
+    n = len(df)
+    df = df.copy()
+    window = min(10, n)
+    df["rolling"] = df["confidence"].rolling(window, min_periods=1).mean()
+
+    low_zones: list[tuple] = []
+    in_zone = False
+    zone_start = None
+    for _, row in df.iterrows():
+        if row["rolling"] < 0.5 and not in_zone:
+            in_zone = True
+            zone_start = row["ts"]
+        elif row["rolling"] >= 0.5 and in_zone:
+            in_zone = False
+            low_zones.append((zone_start, row["ts"]))
+    if in_zone and zone_start is not None:
+        low_zones.append((zone_start, df["ts"].iloc[-1]))
+
+    fig = go.Figure()
+    for z0, z1 in low_zones:
+        fig.add_vrect(x0=z0, x1=z1, fillcolor="#FEB2B2", opacity=0.25, line_width=0)
+
+    baseline_mean = baseline_df["confidence"].mean()
+    fig.add_hline(y=baseline_mean, line_dash="dot", line_color="#718096",
+                  annotation_text=f"Baseline {baseline_mean:.1%}",
+                  annotation_position="top right")
+    fig.add_hline(y=0.5, line_dash="dash", line_color="#F4A261",
+                  annotation_text="50% threshold", annotation_position="bottom right")
+
+    fig.add_trace(go.Scatter(
+        x=df["ts"], y=df["confidence"], mode="markers", name="Prediction",
+        marker=dict(color="#CBD5E0", size=5, opacity=0.7),
+        hovertemplate="%{x|%H:%M:%S} · %{y:.1%}<extra></extra>",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df["ts"], y=df["rolling"], mode="lines", name=f"Rolling avg ({window})",
+        line=dict(color="#E63946", width=2.5),
+        hovertemplate="%{y:.1%}<extra></extra>",
+    ))
+    if len(recent_df) >= 3:
+        r_mean = recent_df["confidence"].mean()
+        fig.add_trace(go.Scatter(
+            x=recent_df["ts"], y=[r_mean] * len(recent_df),
+            mode="lines", name=f"Recent avg {r_mean:.1%}",
+            line=dict(color="#F4A261", width=2, dash="dash"),
+        ))
+
+    fig.update_layout(
+        height=280, template="plotly_white", hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
+        margin=dict(l=20, r=20, t=30, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(tickformat=".0%", range=[0, 1]),
+        xaxis=dict(title="Time"),
+    )
+    st.plotly_chart(fig, width="stretch", key="drift_conf_chart")
+    if low_zones:
+        st.caption(f"Shaded regions: {len(low_zones)} low-confidence zone(s) where rolling avg < 50%.")
+
+
+def _render_class_shift(df: pd.DataFrame, baseline_df: pd.DataFrame, recent_df: pd.DataFrame) -> None:
+    from config import DISEASE_DISPLAY
+    all_diseases = sorted(df["disease"].unique())
+    display_names = [DISEASE_DISPLAY.get(d, d) for d in all_diseases]
+
+    b_counts = baseline_df["disease"].value_counts()
+    r_counts = recent_df["disease"].value_counts()
+    b_pct = [b_counts.get(d, 0) / max(len(baseline_df), 1) for d in all_diseases]
+    r_pct = [r_counts.get(d, 0) / max(len(recent_df), 1) for d in all_diseases]
+    deltas = [r - b for r, b in zip(r_pct, b_pct)]
+
+    for d, delta in zip(all_diseases, deltas):
+        if abs(delta) > 0.15:
+            direction = "spike ↑" if delta > 0 else "drop ↓"
+            st.warning(f"**{DISEASE_DISPLAY.get(d, d)}** {direction} {delta:+.0%} vs baseline", icon="⚠️")
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        name="Baseline", x=display_names, y=b_pct,
+        marker_color="#90CDF4",
+        text=[f"{v:.0%}" for v in b_pct], textposition="outside",
+    ))
+    fig.add_trace(go.Bar(
+        name=f"Recent (last {len(recent_df)})", x=display_names, y=r_pct,
+        marker_color="#F4A261",
+        text=[f"{v:.0%}" for v in r_pct], textposition="outside",
+    ))
+    fig.update_layout(
+        barmode="group", height=320, template="plotly_white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=20, r=20, t=40, b=60),
+        paper_bgcolor="rgba(0,0,0,0)",
+        yaxis=dict(tickformat=".0%", title="Proportion"),
+        xaxis=dict(tickangle=-30),
+    )
+    st.plotly_chart(fig, width="stretch", key="drift_class_chart")
+
+    with st.expander("Delta table"):
+        delta_df = pd.DataFrame({
+            "Disease":    display_names,
+            "Baseline %": [f"{v:.1%}" for v in b_pct],
+            "Recent %":   [f"{v:.1%}" for v in r_pct],
+            "Change":     [f"{v:+.1%}" for v in deltas],
+        })
+        st.dataframe(delta_df, hide_index=True, width="stretch")
+
+
+def _render_ood_entropy(df: pd.DataFrame) -> None:
+    has_entropy = "entropy" in df.columns and df["entropy"].notna().any()
+    has_ood = "is_leaf" in df.columns and df["is_leaf"].notna().any()
+
+    if not has_entropy and not has_ood:
+        st.info("No entropy/OOD data yet — run new predictions to populate.", icon="📊")
+        return
+
+    df = df.copy()
+    df["ood"] = (~df["is_leaf"].fillna(True).astype(bool)).astype(int)
+    window = min(10, len(df))
+    df["rolling_ood"] = df["ood"].rolling(window, min_periods=1).mean()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.caption("**Prediction entropy** — 0 = certain, 1 = uniform (OOD)")
+        if has_entropy:
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=df["ts"], y=df["entropy"], mode="lines+markers", name="Entropy",
+                line=dict(color="#9F7AEA", width=2), marker=dict(size=5),
+                hovertemplate="%{y:.3f}<extra></extra>",
+            ))
+            fig.add_hline(y=0.75, line_dash="dash", line_color="#E53E3E",
+                          annotation_text="OOD threshold (0.75)",
+                          annotation_position="top right")
+            fig.update_layout(
+                height=250, template="plotly_white",
+                margin=dict(l=20, r=20, t=20, b=20),
+                paper_bgcolor="rgba(0,0,0,0)",
+                yaxis=dict(range=[0, 1], title="Entropy"),
+                xaxis=dict(title="Time"),
+            )
+            st.plotly_chart(fig, width="stretch", key="drift_entropy_chart")
+        else:
+            st.info("No entropy data in log yet.")
+
+    with col2:
+        st.caption(f"**Rolling OOD rate** — % non-leaf inputs in last {window} predictions")
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=df["ts"], y=df["rolling_ood"], mode="lines", name="OOD rate",
+            line=dict(color="#E53E3E", width=2),
+            fill="tozeroy", fillcolor="rgba(229,62,62,0.1)",
+            hovertemplate="%{y:.0%}<extra></extra>",
+        ))
+        fig.add_hline(y=0.25, line_dash="dash", line_color="#D69E2E",
+                      annotation_text="25% alert", annotation_position="top right")
+        fig.update_layout(
+            height=250, template="plotly_white",
+            margin=dict(l=20, r=20, t=20, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            yaxis=dict(tickformat=".0%", range=[0, 1], title="OOD rate"),
+            xaxis=dict(title="Time"),
+        )
+        st.plotly_chart(fig, width="stretch", key="drift_ood_chart")
+
+    ood_count = int(df["ood"].sum())
+    if ood_count > 0:
+        st.info(f"{ood_count} OOD prediction(s) detected ({ood_count / len(df):.0%} of total).", icon="🔍")
+
+
+def _render_time_patterns(df: pd.DataFrame) -> None:
+    hourly = (
+        df.groupby("hour")
+        .agg(count=("confidence", "count"), avg_conf=("confidence", "mean"))
+        .reindex(range(24), fill_value=0)
+        .reset_index()
+    )
+
+    fig = make_subplots(specs=[[{"secondary_y": True}]])
+    fig.add_trace(go.Bar(
+        x=hourly["hour"], y=hourly["count"], name="Predictions",
+        marker_color="#90CDF4",
+        hovertemplate="Hour %{x}:00 — %{y} predictions<extra></extra>",
+    ), secondary_y=False)
+
+    mask = hourly["count"] > 0
+    fig.add_trace(go.Scatter(
+        x=hourly[mask]["hour"], y=hourly[mask]["avg_conf"],
+        mode="lines+markers", name="Avg confidence",
+        line=dict(color="#E63946", width=2), marker=dict(size=6),
+        hovertemplate="Hour %{x}:00 — %{y:.1%}<extra></extra>",
+    ), secondary_y=True)
+
+    fig.update_layout(
+        height=280, template="plotly_white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=20, r=20, t=30, b=20),
+        paper_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(title="Hour of day", dtick=2),
+        hovermode="x unified",
+    )
+    fig.update_yaxes(title_text="Predictions", secondary_y=False)
+    fig.update_yaxes(title_text="Avg Confidence", tickformat=".0%", range=[0, 1], secondary_y=True)
+    st.plotly_chart(fig, width="stretch", key="drift_time_chart")
+
+
+@st.fragment(run_every="30s")
 def _drift_panel() -> None:
-    """Confidence trend and basic drift detection from the inference log."""
-    st.markdown('<div class="section-label">Inference Drift Monitor</div>', unsafe_allow_html=True)
+    """Full inference drift dashboard — PSI, class shift, OOD/entropy, time patterns."""
+    from config import DISEASE_DISPLAY
+
+    st.markdown('<div class="section-label">Inference Drift Dashboard</div>', unsafe_allow_html=True)
 
     log_path = Path("outputs/inference_log.jsonl")
     if not log_path.exists():
-        st.info(
-            "No inference log yet — run predictions to populate drift metrics.",
-            icon="📊",
-        )
+        st.info("No inference log yet — run predictions to populate drift metrics.", icon="📊")
         return
 
     try:
@@ -316,75 +523,104 @@ def _drift_panel() -> None:
 
     df["ts"] = pd.to_datetime(df["ts"])
     df = df.sort_values("ts").reset_index(drop=True)
+    df["hour"] = df["ts"].dt.hour
 
-    # Summary row
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total Predictions", len(df))
-    m2.metric("Avg Confidence",    f"{df['confidence'].mean():.1%}")
-    m3.metric("Below 50%",         int((df["confidence"] < 0.5).sum()))
-    m4.metric("Unique Models",     df["model"].nunique())
+    # Back-compat: old log entries won't have entropy / is_leaf
+    if "entropy" not in df.columns:
+        df["entropy"] = float("nan")
+    if "is_leaf" not in df.columns:
+        df["is_leaf"] = True
 
-    # Confidence trend chart
-    df["rolling"] = df["confidence"].rolling(min(5, len(df)), min_periods=1).mean()
+    n = len(df)
+    half = max(1, n // 2)
+    recent_n = min(20, half)
+    baseline_df = df.iloc[:half]
+    recent_df   = df.iloc[n - recent_n:]
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=df["ts"], y=df["confidence"],
-        mode="markers", name="Per prediction",
-        marker=dict(color="#CBD5E0", size=5),
-        hovertemplate="%{y:.1%}",
-    ))
-    fig.add_trace(go.Scatter(
-        x=df["ts"], y=df["rolling"],
-        mode="lines", name="Rolling avg",
-        line=dict(color="#E63946", width=2.5),
-        hovertemplate="%{y:.1%}",
-    ))
-    fig.add_hline(y=0.5, line_dash="dash", line_color="#F4A261",
-                  annotation_text="50% threshold", annotation_position="bottom right")
-    fig.update_layout(
-        height=240, template="plotly_white", hovermode="x unified",
-        legend=dict(orientation="h", yanchor="bottom", y=1.05, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=30, b=20),
-        paper_bgcolor="rgba(0,0,0,0)",
-        yaxis=dict(tickformat=".0%", range=[0, 1]),
-    )
-    st.plotly_chart(fig, width="stretch", key="drift_chart")
+    avg_conf     = df["confidence"].mean()
+    baseline_conf = baseline_df["confidence"].mean()
+    recent_conf  = recent_df["confidence"].mean()
+    conf_delta   = recent_conf - baseline_conf
 
-    # Drift alert based on confidence delta
-    if len(df) >= 20:
-        baseline = df.head(10)["confidence"].mean()
-        recent   = df.tail(10)["confidence"].mean()
-        delta    = recent - baseline
-        if delta < -0.15:
+    ood_mask     = ~df["is_leaf"].fillna(True).astype(bool)
+    ood_rate     = ood_mask.mean()
+    recent_ood   = (~recent_df["is_leaf"].fillna(True).astype(bool)).mean()
+
+    top_disease  = df["disease"].value_counts().idxmax()
+    top_display  = DISEASE_DISPLAY.get(top_disease, top_disease)
+
+    # Population Stability Index on confidence distribution
+    def _psi(base_s: pd.Series, curr_s: pd.Series, bins: int = 10) -> float:
+        edges = np.linspace(0.0, 1.0, bins + 1)
+        b = np.histogram(base_s.dropna(), bins=edges)[0].astype(float) + 1e-6
+        c = np.histogram(curr_s.dropna(), bins=edges)[0].astype(float) + 1e-6
+        b /= b.sum(); c /= c.sum()
+        return float(np.sum((c - b) * np.log(c / b)))
+
+    psi = _psi(baseline_df["confidence"], recent_df["confidence"]) if n >= 20 else None
+
+    if psi is None:
+        drift_label = "Insufficient data"
+    elif psi < 0.1:
+        drift_label = "Stable"
+    elif psi < 0.25:
+        drift_label = "Moderate drift"
+    else:
+        drift_label = "Significant drift"
+
+    # ── KPI row ──────────────────────────────────────────────────────────────
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Predictions", n)
+    c2.metric("Avg Confidence",  f"{avg_conf:.1%}",
+              delta=f"{conf_delta:+.1%}" if n >= 10 else None)
+    c3.metric("OOD Rate",        f"{ood_rate:.1%}",
+              delta=f"{recent_ood - ood_rate:+.1%}" if n >= 10 else None,
+              delta_color="inverse")
+    c4.metric("Top Disease",     top_display)
+    c5.metric("PSI Drift",       drift_label,
+              delta=f"{psi:.3f}" if psi is not None else None,
+              delta_color="off")
+
+    # ── Alert banner ──────────────────────────────────────────────────────────
+    if psi is not None:
+        if psi >= 0.25:
             st.error(
-                f"Confidence dropped {abs(delta):.1%} vs baseline — "
-                "possible data drift. Consider retraining.",
-                icon="🔴",
+                f"PSI = {psi:.3f} — significant distribution shift detected. "
+                "Review recent inputs and consider retraining.", icon="🔴"
             )
-        elif delta < -0.08:
+        elif psi >= 0.1:
+            st.warning(f"PSI = {psi:.3f} — moderate drift detected. Monitor closely.", icon="⚠️")
+        elif recent_ood > 0.25:
             st.warning(
-                f"Confidence down {abs(delta):.1%} vs baseline — monitor closely.",
-                icon="⚠️",
+                f"OOD rate is {recent_ood:.0%} in recent predictions — "
+                "many non-leaf inputs are being submitted.", icon="⚠️"
             )
         else:
-            st.success("Confidence stable — no significant drift detected.", icon="✅")
+            st.success(f"PSI = {psi:.3f} — model input distribution is stable.", icon="✅")
 
-    # Class distribution expander
-    with st.expander("Prediction class distribution"):
-        from config import DISEASE_DISPLAY
-        dist = (
-            df["disease"]
-            .value_counts()
-            .rename_axis("Disease")
-            .reset_index(name="Count")
-        )
-        dist["Disease"] = dist["Disease"].map(lambda x: DISEASE_DISPLAY.get(x, x))
-        st.dataframe(dist, width="stretch", hide_index=True)
+    # ── Tabs ──────────────────────────────────────────────────────────────────
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Confidence Drift", "Class Distribution", "OOD / Entropy", "Time Patterns"
+    ])
+    with tab1:
+        _render_confidence_drift(df, baseline_df, recent_df)
+    with tab2:
+        _render_class_shift(df, baseline_df, recent_df)
+    with tab3:
+        _render_ood_entropy(df)
+    with tab4:
+        _render_time_patterns(df)
 
-    if st.button("Clear inference log", type="secondary", key="clear_inf_log"):
-        log_path.unlink(missing_ok=True)
-        st.rerun()
+    # ── Footer controls ───────────────────────────────────────────────────────
+    st.divider()
+    col_btn, col_info = st.columns([1, 5])
+    with col_btn:
+        if st.button("Clear log", type="secondary", key="clear_inf_log"):
+            log_path.unlink(missing_ok=True)
+            st.rerun()
+    with col_info:
+        last_ts = df["ts"].max().strftime("%Y-%m-%d %H:%M:%S")
+        st.caption(f"`{log_path}` · {n} entries · last updated {last_ts}")
 
 
 @st.fragment(run_every="5s")
