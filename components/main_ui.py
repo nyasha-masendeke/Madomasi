@@ -207,6 +207,33 @@ def _prob_bars_html(all_probs: dict, top_disease: str) -> str:
 
 
 def _diagnosis_card(result: dict):
+    # Entropy guard — warn when the model's probability mass is too spread out
+    if not result.get("is_leaf", True):
+        norm_entropy = result.get("entropy", 1.0)
+        _html(f"""
+        <div class="result-card" style="border-color:rgba(245,158,11,0.35);
+             background:linear-gradient(145deg,rgba(245,158,11,0.08) 0%,rgba(8,12,20,0.9) 100%);
+             box-shadow:0 0 40px rgba(245,158,11,0.07);">
+            <div style="font-size:0.62rem;font-weight:700;text-transform:uppercase;
+                        letter-spacing:2px;color:#78350F;margin-bottom:0.5rem;">Input Detection</div>
+            <div style="font-size:1.45rem;font-weight:800;color:#FBBF24;line-height:1.2;
+                        margin-bottom:0.4rem;">
+                ⚠ Unrecognised Input
+            </div>
+            <div style="font-size:0.82rem;color:#92400E;margin-bottom:1rem;">
+                The model's confidence is spread too evenly across all 10 classes
+                (entropy {norm_entropy:.0%} of max). This image is likely not a tomato leaf.
+            </div>
+            <div style="font-size:0.72rem;color:#78350F;background:rgba(245,158,11,0.07);
+                        border:1px solid rgba(245,158,11,0.15);border-radius:8px;padding:0.6rem 0.9rem;">
+                💡 For best results, photograph a single tomato leaf in good lighting.
+                Confident misclassifications (e.g. a face at high confidence) require
+                retraining with a dedicated "Not a leaf" class.
+            </div>
+        </div>
+        """)
+        return
+
     disease = result["disease"]
     display = DISEASE_DISPLAY.get(disease, disease)
     conf = result["confidence"]
@@ -256,6 +283,18 @@ def _diagnosis_card(result: dict):
         </div>
 
         {_prob_bars_html(result["all_probs"], disease)}
+
+        <div style="margin-top:1rem;padding-top:0.75rem;border-top:1px solid rgba(255,255,255,0.05);
+                    display:flex;align-items:center;gap:0.5rem;">
+            <span style="font-size:0.62rem;font-weight:700;text-transform:uppercase;
+                         letter-spacing:1.5px;color:#374151;">Prediction Entropy</span>
+            <span style="font-size:0.72rem;color:{'#34D399' if result.get('entropy',0) < 0.35 else '#FBBF24' if result.get('entropy',0) < 0.6 else '#F87171'};font-weight:700;">
+                {result.get('entropy', 0):.0%}
+            </span>
+            <span style="font-size:0.68rem;color:#374151;">
+                {'· Low — model is certain' if result.get('entropy',0) < 0.35 else '· Moderate — some uncertainty' if result.get('entropy',0) < 0.6 else '· High — verify with a clearer image'}
+            </span>
+        </div>
     </div>
     """)
 
@@ -319,37 +358,65 @@ def plot_inference_charts(log: list):
     df["Index"] = range(1, len(df) + 1)
     df["IsDisease"] = ~df["Disease"].str.lower().str.contains("healthy")
 
-    fig = make_subplots(
-        rows=1, cols=2,
-        subplot_titles=("Confidence per Scan", "Disease vs Healthy"),
-        horizontal_spacing=0.14,
-    )
-    colors = ["#F87171" if d else "#34D399" for d in df["IsDisease"]]
-    fig.add_trace(go.Bar(x=df["Index"], y=df["Confidence_f"], name="Confidence",
-                         marker_color=colors, hovertemplate="%{y:.1%}<extra></extra>"), row=1, col=1)
+    disease_count = int(df["IsDisease"].sum())
+    healthy_count = int(len(df) - disease_count)
+    avg_conf = df["Confidence_f"].mean()
+    pass_count = int((df["Confidence"] != "Low").sum()) if "Confidence" in df else len(df)
 
-    disease_count = df["IsDisease"].sum()
-    healthy_count = len(df) - disease_count
-    fig.add_trace(go.Pie(
-        labels=["Disease", "Healthy"],
-        values=[disease_count, healthy_count],
-        marker=dict(colors=["#F87171", "#34D399"],
-                    line=dict(color="rgba(0,0,0,0)", width=0)),
-        hole=0.55,
-        textinfo="percent+label",
-        textfont=dict(color="#94A3B8", size=11),
-        hovertemplate="%{label}: %{value} scans<extra></extra>",
-    ), row=1, col=2)
+    # ── Summary metric cards ─────────────────────────────────────────────
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total Scans", len(df))
+    m2.metric("Diseases Found", disease_count)
+    m3.metric("Healthy", healthy_count)
+    m4.metric("Avg Confidence", f"{avg_conf:.1%}")
 
-    fig.update_layout(
-        height=320, template="plotly_dark", showlegend=False,
-        margin=dict(l=10, r=10, t=45, b=10),
-        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(255,255,255,0.02)",
-        font=dict(color="#94A3B8"),
-    )
-    fig.update_yaxes(tickformat=".0%", gridcolor="rgba(255,255,255,0.05)", row=1, col=1)
-    fig.update_xaxes(title_text="Scan #", gridcolor="rgba(255,255,255,0.05)", row=1, col=1)
-    st.plotly_chart(fig, width="stretch", key="inference_charts")
+    st.markdown("<div style='height:0.5rem'></div>", unsafe_allow_html=True)
+
+    # ── Two independent charts ───────────────────────────────────────────
+    c1, c2 = st.columns([3, 2], gap="large")
+
+    with c1:
+        colors = ["#F87171" if d else "#34D399" for d in df["IsDisease"]]
+        fig_bar = go.Figure(go.Bar(
+            x=df["Index"], y=df["Confidence_f"],
+            marker_color=colors,
+            hovertemplate="Scan %{x}<br>Confidence: %{y:.1%}<extra></extra>",
+        ))
+        fig_bar.update_layout(
+            title=dict(text="Confidence per Scan", font=dict(size=13, color="#64748B"), x=0),
+            height=300, template="plotly_dark", showlegend=False,
+            margin=dict(l=20, r=10, t=50, b=50),
+            paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(255,255,255,0.02)",
+            font=dict(color="#94A3B8", size=12),
+            yaxis=dict(tickformat=".0%", gridcolor="rgba(255,255,255,0.05)",
+                       title=dict(text="Confidence", font=dict(size=12))),
+            xaxis=dict(title=dict(text="Scan #", font=dict(size=12)),
+                       gridcolor="rgba(255,255,255,0.05)"),
+        )
+        st.plotly_chart(fig_bar, width="stretch", key="bar_chart")
+
+    with c2:
+        fig_pie = go.Figure(go.Pie(
+            labels=["Disease", "Healthy"],
+            values=[disease_count, healthy_count],
+            marker=dict(colors=["#F87171", "#34D399"],
+                        line=dict(color="rgba(0,0,0,0)", width=0)),
+            hole=0.6,
+            textinfo="percent+label",
+            textfont=dict(size=13, color="#E2E8F0"),
+            hovertemplate="%{label}: %{value} scans<extra></extra>",
+            insidetextorientation="radial",
+        ))
+        fig_pie.update_layout(
+            title=dict(text="Disease vs Healthy", font=dict(size=13, color="#64748B"), x=0),
+            height=300, template="plotly_dark",
+            margin=dict(l=10, r=10, t=50, b=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#94A3B8", size=12),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.15,
+                        xanchor="center", x=0.5, font=dict(size=12)),
+        )
+        st.plotly_chart(fig_pie, width="stretch", key="pie_chart")
 
 
 # =============================================================================

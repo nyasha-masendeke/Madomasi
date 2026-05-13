@@ -237,6 +237,15 @@ def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5
     class_idx = int(np.argmax(preds))
     confidence = float(preds[class_idx])
 
+    # Entropy-based OOD guard: if the probability mass is spread too evenly
+    # across all classes the input is likely not a tomato leaf.
+    # Note: this catches *uncertain* predictions only — a model that is
+    # confidently wrong (e.g. a face predicted at 98%) will still pass.
+    entropy = float(-np.sum(preds * np.log(np.clip(preds, 1e-10, 1.0))))
+    max_entropy = float(np.log(len(preds)))          # ln(num_classes)
+    norm_entropy = round(entropy / max_entropy, 3)    # 0 = certain, 1 = uniform
+    is_leaf = norm_entropy < 0.75
+
     def class_name(i):
         return DISEASE_CLASSES[i] if i < len(DISEASE_CLASSES) else f"Class {i}"
 
@@ -245,6 +254,8 @@ def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5
         "confidence": confidence,
         "passes_threshold": confidence >= confidence_threshold,
         "all_probs": {class_name(i): float(p) for i, p in enumerate(preds)},
+        "is_leaf": is_leaf,
+        "entropy": norm_entropy,
     }
 
 
