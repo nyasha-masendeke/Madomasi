@@ -7,9 +7,7 @@ from datetime import datetime
 import numpy as np
 from PIL import Image
 
-from config import DISEASE_CLASSES
-
-IMAGE_SIZE = (224, 224)
+from config import DISEASE_CLASSES, IMAGE_SIZE, DROPOUT_RATE, EARLY_STOPPING_PATIENCE, OOD_ENTROPY_THRESHOLD
 
 
 def _next_training_output_dir() -> Path:
@@ -86,7 +84,7 @@ def build_model(num_classes: int, freeze_base: bool = True) -> tf.keras.Model:
     x = tf.keras.applications.mobilenet_v3.preprocess_input(inputs)
     x = base(x, training=not freeze_base)
     x = tf.keras.layers.GlobalAveragePooling2D()(x)
-    x = tf.keras.layers.Dropout(0.3)(x)
+    x = tf.keras.layers.Dropout(DROPOUT_RATE)(x)
     outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
     return tf.keras.Model(inputs, outputs)
 
@@ -123,7 +121,7 @@ def train_model(
             mode="max", verbose=0
         ),
         tf.keras.callbacks.EarlyStopping(
-            monitor="val_loss", patience=3, restore_best_weights=True, verbose=0
+            monitor="val_loss", patience=EARLY_STOPPING_PATIENCE, restore_best_weights=True, verbose=0
         ),
     ]
 
@@ -177,10 +175,10 @@ def train_two_stage(
 
     # Each stage gets its own EarlyStopping instance — they must not share state
     early_stop_fe = tf.keras.callbacks.EarlyStopping(
-        monitor="val_loss", patience=3, restore_best_weights=True, verbose=0
+        monitor="val_loss", patience=EARLY_STOPPING_PATIENCE, restore_best_weights=True, verbose=0
     )
     early_stop_ft = tf.keras.callbacks.EarlyStopping(
-        monitor="val_loss", patience=3, restore_best_weights=True, verbose=0
+        monitor="val_loss", patience=EARLY_STOPPING_PATIENCE, restore_best_weights=True, verbose=0
     )
 
     # ── Stage 1: Feature Extraction ──────────────────────────────────────
@@ -250,7 +248,7 @@ def predict_image(model_path: str, image_data, confidence_threshold: float = 0.5
     entropy = float(-np.sum(preds * np.log(np.clip(preds, 1e-10, 1.0))))
     max_entropy = float(np.log(len(preds)))          # ln(num_classes)
     norm_entropy = round(entropy / max_entropy, 3)    # 0 = certain, 1 = uniform
-    is_leaf = norm_entropy < 0.75
+    is_leaf = norm_entropy < OOD_ENTROPY_THRESHOLD
 
     def class_name(i):
         return DISEASE_CLASSES[i] if i < len(DISEASE_CLASSES) else f"Class {i}"
@@ -687,7 +685,7 @@ def train_head(
                 save_best_only=True, mode="max", verbose=0,
             ),
             tf.keras.callbacks.EarlyStopping(
-                monitor="val_loss", patience=3,
+                monitor="val_loss", patience=EARLY_STOPPING_PATIENCE,
                 restore_best_weights=True, verbose=0,
             ),
         ],
@@ -786,7 +784,7 @@ def fine_tune_model(
                 save_best_only=True, mode="max", verbose=0,
             ),
             tf.keras.callbacks.EarlyStopping(
-                monitor="val_loss", patience=3,
+                monitor="val_loss", patience=EARLY_STOPPING_PATIENCE,
                 restore_best_weights=True, verbose=0,
             ),
         ],

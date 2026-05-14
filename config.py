@@ -1,6 +1,11 @@
 """Project configuration, constants, and design system."""
 import streamlit as st
 
+IMAGE_SIZE = (224, 224)
+DROPOUT_RATE = 0.3
+EARLY_STOPPING_PATIENCE = 3
+OOD_ENTROPY_THRESHOLD = 0.75
+
 PAGE_CONFIG = {
     "page_title": "Madomasi — Tomato AI",
     "page_icon": "🍅",
