@@ -1,6 +1,7 @@
 """System resource dashboard tab — CPU, RAM, disk, and usage history."""
 import json
 import platform
+import tracemalloc
 from datetime import datetime
 from pathlib import Path
 
@@ -11,6 +12,11 @@ import psutil
 import streamlit as st
 import tensorflow as tf
 from plotly.subplots import make_subplots
+
+# Start tracemalloc once at module load so all subsequent allocations are tracked.
+# Idempotent — safe to call even if another import already started it.
+if not tracemalloc.is_tracing():
+    tracemalloc.start(10)
 
 
 def _read_temp() -> float | None:
