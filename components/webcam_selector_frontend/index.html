@@ -370,9 +370,22 @@ select.addEventListener("change", async () => {
 // ── Capture ───────────────────────────────────────────────────────────────────
 captureBtn.addEventListener("click", () => {
   if (!currentStream) return;
-  canvas.width  = video.videoWidth  || 640;
-  canvas.height = video.videoHeight || 480;
-  canvas.getContext("2d").drawImage(video, 0, 0);
+  const ctx = canvas.getContext("2d");
+  if (smoothBox) {
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const dw = video.clientWidth,  dh = video.clientHeight;
+    const srcX = Math.round(smoothBox.bx  * vw / dw);
+    const srcY = Math.round(smoothBox.by  * vh / dh);
+    const srcW = Math.round((smoothBox.bx2 - smoothBox.bx) * vw / dw);
+    const srcH = Math.round((smoothBox.by2 - smoothBox.by) * vh / dh);
+    canvas.width  = srcW;
+    canvas.height = srcH;
+    ctx.drawImage(video, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+  } else {
+    canvas.width  = video.videoWidth  || 640;
+    canvas.height = video.videoHeight || 480;
+    ctx.drawImage(video, 0, 0);
+  }
   setComponentValue(canvas.toDataURL("image/jpeg", 0.92));
 });
 

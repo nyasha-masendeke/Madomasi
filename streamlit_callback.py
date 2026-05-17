@@ -5,20 +5,7 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-
-def _next_training_output_dir() -> Path:
-    """Return the next unused outputs/TrainingN directory and create it."""
-    base = Path("outputs")
-    base.mkdir(exist_ok=True)
-    existing = [
-        int(p.name[8:])
-        for p in base.iterdir()
-        if p.is_dir() and p.name.startswith("Training") and p.name[8:].isdigit()
-    ]
-    n = max(existing, default=0) + 1
-    d = base / f"Training{n}"
-    d.mkdir(exist_ok=True)
-    return d
+from src.training.data import next_training_output_dir as _next_training_output_dir  # noqa: F401
 
 
 class StreamlitTrainCallback(tf.keras.callbacks.Callback):

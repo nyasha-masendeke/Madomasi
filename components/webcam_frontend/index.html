@@ -234,12 +234,12 @@ function detectFrame() {
     const { bx: rx, by: ry, bx2: rx2, by2: ry2 } = smoothBox;
     const rw = rx2 - rx, rh = ry2 - ry;
 
-    // Draw box
+    // Tight tracking rectangle — responsive, follows the leaf
     octx.strokeStyle = BOX_COLOR;
     octx.lineWidth   = 2.5;
     octx.strokeRect(rx, ry, rw, rh);
 
-    // Filled label tab above the box
+    // Label tab above the tight box
     const label = "Leaf detected";
     octx.font = "bold 12px -apple-system, sans-serif";
     const tw = octx.measureText(label).width;
@@ -250,19 +250,40 @@ function detectFrame() {
     octx.fillStyle = "#000";
     octx.fillText(label, rx + 5, tabY + 14);
 
+    // Dashed square showing the actual capture crop region
+    const cx = (rx + rx2) / 2, cy = (ry + ry2) / 2;
+    const half = Math.max(rw, rh) / 2 + pad;
+    const sqX = Math.max(0, cx - half);
+    const sqY = Math.max(0, cy - half);
+    const sqSide = Math.min(dw - sqX, dh - sqY, half * 2);
+    octx.strokeStyle = "rgba(0,230,80,0.45)";
+    octx.lineWidth   = 1.5;
+    octx.setLineDash([5, 4]);
+    octx.strokeRect(sqX, sqY, sqSide, sqSide);
+    octx.setLineDash([]);
+    octx.fillStyle = "rgba(0,230,80,0.45)";
+    octx.font = "11px -apple-system, sans-serif";
+    octx.fillText("capture area", sqX + 4, sqY + sqSide - 6);
+
+    captureBtn.disabled = false;
+    captureBtn.textContent = "📷 Take Photo";
+
   } else {
-    // No leaf found — draw a dashed ROI guide centred in the frame
+    // No leaf found — draw a small dashed ROI guide centred in the frame
     smoothBox = null;
-    const mx = dw * 0.1, my = dh * 0.1;
-    const rw = dw * 0.8,  rh = dh * 0.8;
+    const side = Math.min(dw, dh) * 0.45;
+    const mx = (dw - side) / 2, my = (dh - side) / 2;
     octx.strokeStyle = ROI_COLOR;
     octx.lineWidth   = 1.5;
     octx.setLineDash([6, 4]);
-    octx.strokeRect(mx, my, rw, rh);
+    octx.strokeRect(mx, my, side, side);
     octx.setLineDash([]);
     octx.fillStyle = ROI_COLOR;
     octx.font = "bold 12px -apple-system, sans-serif";
     octx.fillText("Point at a leaf", mx + 8, my + 16);
+
+    captureBtn.disabled = true;
+    captureBtn.textContent = "Point camera at a leaf";
   }
 }
 
@@ -282,7 +303,7 @@ async function startCamera(deviceId) {
 
   currentStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraint, audio: false });
   video.srcObject = currentStream;
-  captureBtn.disabled = false;
+  captureBtn.textContent = "Point camera at a leaf";
   hideErr();
 
   video.onloadedmetadata = () => {
@@ -369,10 +390,37 @@ select.addEventListener("change", async () => {
 
 // ── Capture ───────────────────────────────────────────────────────────────────
 captureBtn.addEventListener("click", () => {
-  if (!currentStream) return;
-  canvas.width  = video.videoWidth  || 640;
-  canvas.height = video.videoHeight || 480;
-  canvas.getContext("2d").drawImage(video, 0, 0);
+  if (!currentStream || !smoothBox) return;
+  const ctx = canvas.getContext("2d");
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const dw = video.clientWidth,  dh = video.clientHeight;
+
+  // Convert smoothBox to video-pixel coordinates
+  const bx1 = smoothBox.bx  * vw / dw, bx2 = smoothBox.bx2 * vw / dw;
+  const by1 = smoothBox.by  * vh / dh, by2 = smoothBox.by2 * vh / dh;
+
+  // Square crop centred on the leaf box
+  const cx = (bx1 + bx2) / 2, cy = (by1 + by2) / 2;
+  const half = Math.max(bx2 - bx1, by2 - by1) / 2 + 16;
+  const clamped = Math.min(half, cx, cy, vw - cx, vh - cy);
+  const srcX = Math.round(cx - clamped);
+  const srcY = Math.round(cy - clamped);
+  const side = Math.max(Math.round(clamped * 2), 1);
+
+  canvas.width  = side;
+  canvas.height = side;
+  ctx.drawImage(video, srcX, srcY, side, side, 0, 0, side, side);
+
+  // Replace non-leaf pixels with neutral grey (matches PlantVillage-style input)
+  const img = ctx.getImageData(0, 0, side, side);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (!isLeaf(d[i], d[i + 1], d[i + 2])) {
+      d[i] = 122; d[i + 1] = 122; d[i + 2] = 122;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+
   setComponentValue(canvas.toDataURL("image/jpeg", 0.92));
 });
 

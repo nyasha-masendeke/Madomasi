@@ -13,9 +13,6 @@ services:
       - ./models:/app/models
       - ./outputs:/app/outputs
       - ./ssl:/app/ssl:ro
-    devices:
-      - /dev/video0:/dev/video0
-      - /dev/video1:/dev/video1
     environment:
       - STREAMLIT_SERVER_HEADLESS=true
       - STREAMLIT_SERVER_FILE_WATCHER_TYPE=none
