@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir \
 COPY app.py config.py pipeline.py streamlit_callback.py main.py ./
 COPY components/ ./components/
 COPY src/ ./src/
+COPY static/ ./static/
 
 # Create mount-point directories (populated by docker-compose volumes)
 RUN mkdir -p data models outputs

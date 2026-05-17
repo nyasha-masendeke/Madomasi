@@ -12,12 +12,18 @@ services:
       - ./data:/app/data
       - ./models:/app/models
       - ./outputs:/app/outputs
+      - ./ssl:/app/ssl:ro
+    devices:
+      - /dev/video0:/dev/video0
+      - /dev/video1:/dev/video1
     environment:
       - STREAMLIT_SERVER_HEADLESS=true
       - STREAMLIT_SERVER_FILE_WATCHER_TYPE=none
+      - STREAMLIT_SERVER_SSL_CERT_FILE=/app/ssl/cert.pem
+      - STREAMLIT_SERVER_SSL_KEY_FILE=/app/ssl/key.pem
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:8501/_stcore/health"]
       interval: 30s
       timeout: 10s
       retries: 3

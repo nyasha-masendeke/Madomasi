@@ -10,6 +10,7 @@ import tensorflow as tf
 from plotly.subplots import make_subplots
 
 from components.system_dashboard import render_dashboard, record_resource_sample
+from components.webcam_selector import webcam_selector
 import config as _config_module
 from config import DISEASE_CLASSES, DISEASE_DISPLAY, DISEASE_SEVERITY
 
@@ -833,22 +834,15 @@ def run_app():
         with col_upload:
             if input_mode == "📷 Live Camera":
                 st.markdown('<div class="section-label">Live Camera</div>', unsafe_allow_html=True)
-                camera_image = st.camera_input(
-                    "Point camera at a tomato leaf then press the capture button",
-                    label_visibility="collapsed",
-                )
-                if camera_image:
-                    size_kb = len(camera_image.getvalue()) / 1024
+                raw = webcam_selector(key="wc")
+                if raw:
+                    import base64 as _b64
+                    img_bytes = _b64.b64decode(raw.split(",", 1)[1])
+                    size_kb = len(img_bytes) / 1024
                     st.caption(f"📷 Captured &nbsp;·&nbsp; {size_kb:.0f} KB")
-                    source = camera_image
+                    source = io.BytesIO(img_bytes)
                 else:
                     st.session_state.pop("last_static_result", None)
-                    _html("""
-                    <div class="empty-state">
-                        <span class="empty-state-icon">📷</span>
-                        <div class="empty-state-title">Camera ready</div>
-                        <div class="empty-state-sub">Click the capture button to take a photo</div>
-                    </div>""")
             else:
                 st.markdown('<div class="section-label">Upload Leaf Image</div>', unsafe_allow_html=True)
                 uploaded = st.file_uploader(
