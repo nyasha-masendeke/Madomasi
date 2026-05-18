@@ -271,7 +271,7 @@ function detectFrame() {
   } else {
     // No leaf found — draw a small dashed ROI guide centred in the frame
     smoothBox = null;
-    const side = Math.min(dw, dh) * 0.45;
+    const side = Math.min(dw, dh) * 0.20;
     const mx = (dw - side) / 2, my = (dh - side) / 2;
     octx.strokeStyle = ROI_COLOR;
     octx.lineWidth   = 1.5;
