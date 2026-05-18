@@ -1,0 +1,44 @@
+{
+  "platform": "Raspberry Pi 5 — Broadcom BCM2712 Cortex-A76 (inside Docker container)",
+  "benchmark_runs": 30,
+  "deployment_stage1": {
+    "mean_ms": 83.72,
+    "median_ms": 82.77,
+    "p95_ms": 89.14,
+    "p99_ms": 90.74,
+    "min_ms": 79.8,
+    "max_ms": 91.36,
+    "std_ms": 3.13,
+    "peak_ram_mb": 0.69,
+    "model_size_mb": 11.41,
+    "runs": 30,
+    "precision": "float32",
+    "model_format": "keras"
+  },
+  "deployment_stage2": {
+    "mean_ms": 6.06,
+    "median_ms": 5.99,
+    "p95_ms": 6.46,
+    "p99_ms": 6.99,
+    "min_ms": 5.75,
+    "max_ms": 7.18,
+    "std_ms": 0.29,
+    "peak_ram_mb": 0.0,
+    "model_size_mb": 1.08,
+    "runs": 30,
+    "precision": "INT8 (dynamic-range quantisation)",
+    "model_format": "tflite"
+  },
+  "size_reduction_factor": 10.6,
+  "latency_speedup_factor": 13.82,
+  "ood_detection": {
+    "threshold": 0.75,
+    "noise_entropy": 0.2843,
+    "noise_flagged": false,
+    "noise_top_class": 2,
+    "noise_top_conf": 0.8346,
+    "grey_entropy": 0.2984,
+    "grey_flagged": false,
+    "grey_top_conf": 0.8148
+  }
+}
