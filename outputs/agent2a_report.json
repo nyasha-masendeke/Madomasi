@@ -1,0 +1,414 @@
+{
+  "agent": "2a",
+  "status": "complete",
+  "timestamp": "2026-05-18T12:26:48Z",
+  "data_availability": {
+    "train_images": 56,
+    "val_images": 24,
+    "test_images": 14,
+    "full_dataset_available": false,
+    "note": "Only 94 local images available (56 train / 24 val / 14 test). Full PlantVillage subset used for training comprised 7,688 images. Local data is a small subset retained after data pipeline; not sufficient for meaningful retraining."
+  },
+  "training_attempt": {
+    "executed": false,
+    "reason_if_not": "Insufficient local data: only 56 training images available vs 7,688 required (minimum 100 per class x 10 classes)",
+    "stage1": {
+      "epochs_run": 15,
+      "best_val_acc": 0.920026,
+      "best_val_loss": 0.253685,
+      "early_stopping_triggered": false
+    },
+    "stage2": {
+      "epochs_run": 4,
+      "best_val_acc": 0.892648,
+      "best_val_loss": 0.339514,
+      "early_stopping_triggered": true
+    }
+  },
+  "fallback": {
+    "used_existing_model": true,
+    "model_path": "/home/nyasha/Madomasi/models/trained/run_cli/run_20260513_184647/fine_tuned.keras",
+    "history_head_path": "/home/nyasha/Madomasi/models/trained/run_cli/run_20260513_184647/history_head.json",
+    "history_finetune_path": "/home/nyasha/Madomasi/models/trained/run_cli/run_20260513_184647/history_finetune.json"
+  },
+  "training_metrics": {
+    "stage1_epoch_history": [
+      {
+        "epoch": 1,
+        "train_acc": 0.480163,
+        "val_acc": 0.797789,
+        "train_loss": 1.549147,
+        "val_loss": 0.815882
+      },
+      {
+        "epoch": 2,
+        "train_acc": 0.742276,
+        "val_acc": 0.831599,
+        "train_loss": 0.804797,
+        "val_loss": 0.595453
+      },
+      {
+        "epoch": 3,
+        "train_acc": 0.809756,
+        "val_acc": 0.86541,
+        "train_loss": 0.62192,
+        "val_loss": 0.483887
+      },
+      {
+        "epoch": 4,
+        "train_acc": 0.83252,
+        "val_acc": 0.870611,
+        "train_loss": 0.531415,
+        "val_loss": 0.435978
+      },
+      {
+        "epoch": 5,
+        "train_acc": 0.852195,
+        "val_acc": 0.892718,
+        "train_loss": 0.476703,
+        "val_loss": 0.38212
+      },
+      {
+        "epoch": 6,
+        "train_acc": 0.863089,
+        "val_acc": 0.895319,
+        "train_loss": 0.443044,
+        "val_loss": 0.353914
+      },
+      {
+        "epoch": 7,
+        "train_acc": 0.872033,
+        "val_acc": 0.901821,
+        "train_loss": 0.413311,
+        "val_loss": 0.339336
+      },
+      {
+        "epoch": 8,
+        "train_acc": 0.878537,
+        "val_acc": 0.904421,
+        "train_loss": 0.392944,
+        "val_loss": 0.320819
+      },
+      {
+        "epoch": 9,
+        "train_acc": 0.886992,
+        "val_acc": 0.908973,
+        "train_loss": 0.366583,
+        "val_loss": 0.299554
+      },
+      {
+        "epoch": 10,
+        "train_acc": 0.89252,
+        "val_acc": 0.912224,
+        "train_loss": 0.345871,
+        "val_loss": 0.293305
+      },
+      {
+        "epoch": 11,
+        "train_acc": 0.894959,
+        "val_acc": 0.908323,
+        "train_loss": 0.336745,
+        "val_loss": 0.283548
+      },
+      {
+        "epoch": 12,
+        "train_acc": 0.892033,
+        "val_acc": 0.914824,
+        "train_loss": 0.33139,
+        "val_loss": 0.270478
+      },
+      {
+        "epoch": 13,
+        "train_acc": 0.895772,
+        "val_acc": 0.920026,
+        "train_loss": 0.324405,
+        "val_loss": 0.264195
+      },
+      {
+        "epoch": 14,
+        "train_acc": 0.898049,
+        "val_acc": 0.913524,
+        "train_loss": 0.310483,
+        "val_loss": 0.259489
+      },
+      {
+        "epoch": 15,
+        "train_acc": 0.902602,
+        "val_acc": 0.915475,
+        "train_loss": 0.304156,
+        "val_loss": 0.253685
+      }
+    ],
+    "stage2_epoch_history": [
+      {
+        "epoch": 1,
+        "train_acc": 0.300114,
+        "val_acc": 0.892648,
+        "train_loss": 5.281953,
+        "val_loss": 0.339514
+      },
+      {
+        "epoch": 2,
+        "train_acc": 0.478296,
+        "val_acc": 0.850358,
+        "train_loss": 2.444312,
+        "val_loss": 0.479268
+      },
+      {
+        "epoch": 3,
+        "train_acc": 0.635994,
+        "val_acc": 0.820429,
+        "train_loss": 1.331228,
+        "val_loss": 0.561427
+      },
+      {
+        "epoch": 4,
+        "train_acc": 0.708665,
+        "val_acc": 0.801561,
+        "train_loss": 0.953936,
+        "val_loss": 0.60286
+      }
+    ],
+    "test_accuracy": 0.88,
+    "test_loss": 0.398379,
+    "macro_f1": 0.87277,
+    "macro_precision": 0.885276,
+    "macro_recall": 0.88,
+    "per_class": {
+      "Tomato___Bacterial_spot": {
+        "precision": 0.903509,
+        "recall": 0.936364,
+        "f1": 0.919643,
+        "support": 110
+      },
+      "Tomato___Early_blight": {
+        "precision": 0.962264,
+        "recall": 0.463636,
+        "f1": 0.625767,
+        "support": 110
+      },
+      "Tomato___Late_blight": {
+        "precision": 0.87069,
+        "recall": 0.918182,
+        "f1": 0.893805,
+        "support": 110
+      },
+      "Tomato___Leaf_Mold": {
+        "precision": 0.87069,
+        "recall": 0.918182,
+        "f1": 0.893805,
+        "support": 110
+      },
+      "Tomato___Septoria_leaf_spot": {
+        "precision": 0.790323,
+        "recall": 0.890909,
+        "f1": 0.837607,
+        "support": 110
+      },
+      "Tomato___Spider_mites Two-spotted_spider_mite": {
+        "precision": 0.852459,
+        "recall": 0.945455,
+        "f1": 0.896552,
+        "support": 110
+      },
+      "Tomato___Target_Spot": {
+        "precision": 0.828571,
+        "recall": 0.790909,
+        "f1": 0.809302,
+        "support": 110
+      },
+      "Tomato___Tomato_Yellow_Leaf_Curl_Virus": {
+        "precision": 0.972477,
+        "recall": 0.963636,
+        "f1": 0.968037,
+        "support": 110
+      },
+      "Tomato___Tomato_mosaic_virus": {
+        "precision": 0.923729,
+        "recall": 0.990909,
+        "f1": 0.95614,
+        "support": 110
+      },
+      "Tomato___healthy": {
+        "precision": 0.878049,
+        "recall": 0.981818,
+        "f1": 0.927039,
+        "support": 110
+      }
+    },
+    "confusion_matrix": [
+      [
+        103,
+        1,
+        0,
+        1,
+        1,
+        1,
+        2,
+        1,
+        0,
+        0
+      ],
+      [
+        4,
+        51,
+        14,
+        7,
+        17,
+        2,
+        8,
+        1,
+        3,
+        3
+      ],
+      [
+        0,
+        1,
+        101,
+        2,
+        3,
+        0,
+        1,
+        1,
+        1,
+        0
+      ],
+      [
+        0,
+        0,
+        1,
+        101,
+        1,
+        2,
+        0,
+        0,
+        5,
+        0
+      ],
+      [
+        2,
+        0,
+        0,
+        5,
+        98,
+        2,
+        2,
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        104,
+        4,
+        0,
+        0,
+        2
+      ],
+      [
+        3,
+        0,
+        0,
+        0,
+        3,
+        8,
+        87,
+        0,
+        0,
+        9
+      ],
+      [
+        2,
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        106,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        109,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0,
+        108
+      ]
+    ]
+  },
+  "resource_monitoring": {
+    "training_logs_available": true,
+    "sample_log_entries": [
+      {
+        "date": "2026-05-18",
+        "timestamp": "09:56:42",
+        "cpu": 1.25,
+        "ram": 14.0,
+        "temp": 52.9,
+        "activity": ""
+      },
+      {
+        "date": "2026-05-18",
+        "timestamp": "09:57:42",
+        "cpu": 0.75,
+        "ram": 14.0,
+        "temp": 51.2,
+        "activity": ""
+      },
+      {
+        "date": "2026-05-18",
+        "timestamp": "09:58:42",
+        "cpu": 1.5,
+        "ram": 14.0,
+        "temp": 51.8,
+        "activity": ""
+      },
+      {
+        "date": "2026-05-18",
+        "timestamp": "09:59:42",
+        "cpu": 0.75,
+        "ram": 14.0,
+        "temp": 52.4,
+        "activity": ""
+      },
+      {
+        "date": "2026-05-18",
+        "timestamp": "10:00:37",
+        "cpu": 2.0,
+        "ram": 16.4,
+        "temp": 52.9,
+        "activity": ""
+      }
+    ],
+    "peak_cpu_percent": 97.525,
+    "peak_ram_percent": 67.4,
+    "peak_temp_celsius": 84.8
+  },
+  "next_agent_inputs": {
+    "model_path": "/home/nyasha/Madomasi/models/trained/run_cli/run_20260513_184647/fine_tuned.keras",
+    "test_dir": "/home/nyasha/Madomasi/data/splits/test"
+  }
+}

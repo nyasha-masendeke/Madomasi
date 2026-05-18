@@ -1,0 +1,23 @@
+{
+  "agent": "2b",
+  "status": "complete",
+  "timestamp": "2026-05-18T12:35:00Z",
+  "input_model": {
+    "path": "/home/nyasha/Madomasi/models/trained/run_cli/run_20260513_184647/fine_tuned.keras",
+    "size_mb": 11.4119,
+    "format": "keras float32"
+  },
+  "export": {
+    "tflite_path": "/home/nyasha/Madomasi/models/trained/run_cli/run_20260513_184647/model.tflite",
+    "tflite_size_mb": 1.0825,
+    "compression_ratio": 10.5421,
+    "quantisation": "dynamic-range INT8",
+    "already_existed": true,
+    "regenerated": false
+  },
+  "next_agent_inputs": {
+    "keras_path": "/home/nyasha/Madomasi/models/trained/run_cli/run_20260513_184647/fine_tuned.keras",
+    "tflite_path": "/home/nyasha/Madomasi/models/trained/run_cli/run_20260513_184647/model.tflite",
+    "test_dir": "/home/nyasha/Madomasi/data/splits/test"
+  }
+}

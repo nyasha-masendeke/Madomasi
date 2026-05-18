@@ -1,44 +1,96 @@
 {
-  "platform": "Raspberry Pi 5 — Broadcom BCM2712 Cortex-A76 (inside Docker container)",
-  "benchmark_runs": 30,
-  "deployment_stage1": {
-    "mean_ms": 83.72,
-    "median_ms": 82.77,
-    "p95_ms": 89.14,
-    "p99_ms": 90.74,
-    "min_ms": 79.8,
-    "max_ms": 91.36,
-    "std_ms": 3.13,
-    "peak_ram_mb": 0.69,
-    "model_size_mb": 11.41,
-    "runs": 30,
+  "agent": "3",
+  "status": "complete",
+  "timestamp": "2026-05-18T13:10:00Z",
+  "real_images_used": 14,
+  "test_dir": "/app/data/splits/test",
+  "deployment_stage1_keras": {
+    "model_path": "/app/models/trained/run_cli/run_20260513_184647/fine_tuned.keras",
+    "model_size_mb": 11.4119,
     "precision": "float32",
-    "model_format": "keras"
+    "latency": {
+      "mean_ms": 86.64,
+      "median_ms": 85.35,
+      "p95_ms": 93.41,
+      "p99_ms": 94.68,
+      "min_ms": 81.19,
+      "max_ms": 94.99,
+      "std_ms": 3.92
+    },
+    "accuracy_on_real_images": 1.0,
+    "correct": 14,
+    "total": 14,
+    "benchmark_runs": 30,
+    "peak_ram_mb": 9.997
   },
-  "deployment_stage2": {
-    "mean_ms": 6.06,
-    "median_ms": 5.99,
-    "p95_ms": 6.46,
-    "p99_ms": 6.99,
-    "min_ms": 5.75,
-    "max_ms": 7.18,
-    "std_ms": 0.29,
-    "peak_ram_mb": 0.0,
-    "model_size_mb": 1.08,
-    "runs": 30,
-    "precision": "INT8 (dynamic-range quantisation)",
-    "model_format": "tflite"
+  "deployment_stage2_tflite": {
+    "model_path": "/app/models/trained/run_cli/run_20260513_184647/model.tflite",
+    "model_size_mb": 1.0825,
+    "precision": "INT8 dynamic-range",
+    "latency": {
+      "mean_ms": 6.05,
+      "median_ms": 5.96,
+      "p95_ms": 6.51,
+      "p99_ms": 6.67,
+      "min_ms": 5.83,
+      "max_ms": 6.72,
+      "std_ms": 0.23
+    },
+    "accuracy_on_real_images": 1.0,
+    "correct": 14,
+    "total": 14,
+    "benchmark_runs": 30,
+    "peak_ram_mb": 0.002
   },
-  "size_reduction_factor": 10.6,
-  "latency_speedup_factor": 13.82,
+  "accuracy_gap": {
+    "keras_acc": 1.0,
+    "tflite_acc": 1.0,
+    "gap_percentage_points": 0.0,
+    "note": "Zero accuracy degradation from INT8 dynamic-range quantisation on the 14-image local test subset. Both models achieve 100% on the available test images; the full 1,100-image evaluation (agent2a) showed 88.0% test accuracy, indicating the local subset is not statistically representative but confirms quantisation does not introduce additional errors on these samples."
+  },
+  "size_reduction_factor": 10.5422,
+  "latency_speedup_factor": 14.3207,
   "ood_detection": {
     "threshold": 0.75,
-    "noise_entropy": 0.2843,
-    "noise_flagged": false,
-    "noise_top_class": 2,
-    "noise_top_conf": 0.8346,
-    "grey_entropy": 0.2984,
-    "grey_flagged": false,
-    "grey_top_conf": 0.8148
+    "inputs_tested": 5,
+    "results": [
+      {
+        "input_type": "uniform_random_noise",
+        "entropy": 0.2785,
+        "flagged": false,
+        "top_conf": 0.8405,
+        "top_class_idx": 2
+      },
+      {
+        "input_type": "blank_grey",
+        "entropy": 0.2984,
+        "flagged": false,
+        "top_conf": 0.8148,
+        "top_class_idx": 2
+      },
+      {
+        "input_type": "solid_red",
+        "entropy": 0.2993,
+        "flagged": false,
+        "top_conf": 0.8138,
+        "top_class_idx": 2
+      },
+      {
+        "input_type": "gaussian_noise_low",
+        "entropy": 0.302,
+        "flagged": false,
+        "top_conf": 0.8113,
+        "top_class_idx": 2
+      },
+      {
+        "input_type": "horizontal_gradient",
+        "entropy": 0.2982,
+        "flagged": false,
+        "top_conf": 0.8153,
+        "top_class_idx": 2
+      }
+    ],
+    "false_negatives": 5,
+    "note": "All 5 OOD inputs went undetected (false-negative rate 100%). The model confidently assigns all synthetic non-plant inputs to class index 2 (Tomato___Late_blight) with top confidence ~0.81-0.84 and entropy ~0.28-0.30, well below the 0.75 threshold. This reveals systematic overconfidence: MobileNetV3 trained solely on PlantVillage maps any structured or unstructured image to the nearest tomato disease class. An entropy-based OOD gate requires a lower threshold (~0.25) or a dedicated OOD detector (energy score, Mahalanobis distance) before production deployment."
   }
 }
