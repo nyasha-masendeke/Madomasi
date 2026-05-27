@@ -1,6 +1,7 @@
 """System resource dashboard tab — CPU, RAM, disk, and usage history."""
 import json
 import platform
+import threading
 import tracemalloc
 from datetime import datetime
 from pathlib import Path
@@ -44,10 +45,10 @@ def _get_stats() -> dict:
     vm   = psutil.virtual_memory()
     disk = psutil.disk_usage("C:\\" if platform.system() == "Windows" else "/")
 
-    # interval=1.0 blocks for 1 s to get an accurate system-wide reading.
-    # percpu=True lets us report the busiest core separately so a single
-    # heavy subprocess doesn't get hidden by averaging across all cores.
-    per_cpu = psutil.cpu_percent(interval=1.0, percpu=True)
+    # interval=None returns the delta since the last call with no blocking.
+    # The fragment fires every 5 s so the measurement window is already accurate.
+    # interval=1.0 would block the Streamlit server thread for 1 s on every tick.
+    per_cpu = psutil.cpu_percent(interval=None, percpu=True)
     cpu_avg = sum(per_cpu) / len(per_cpu)
     cpu_max = max(per_cpu)
 
@@ -82,15 +83,29 @@ def _get_stats() -> dict:
     return stats
 
 
-_RESOURCE_LOG = Path("outputs/resource_log.jsonl")
+_RESOURCE_LOG  = Path("outputs/resource_log.jsonl")
+_MAX_LOG_BYTES = 5 * 1024 * 1024   # 5 MB — ~70 h at 12 samples/min
+_KEEP_LINES    = 8_000
+BASELINE_FILE  = Path("outputs/drift_baseline.json")
+
+
+def _rotate_log() -> None:
+    try:
+        lines = _RESOURCE_LOG.read_text().splitlines()
+        if len(lines) > _KEEP_LINES:
+            _RESOURCE_LOG.write_text("\n".join(lines[-_KEEP_LINES:]) + "\n")
+    except Exception:
+        pass
 
 
 def _persist_sample(sample: dict) -> None:
-    """Append one resource sample to outputs/resource_log.jsonl."""
+    """Append one resource sample to outputs/resource_log.jsonl, rotating if > 5 MB."""
     try:
         _RESOURCE_LOG.parent.mkdir(exist_ok=True)
         with open(_RESOURCE_LOG, "a") as f:
             f.write(json.dumps(sample) + "\n")
+        if _RESOURCE_LOG.stat().st_size > _MAX_LOG_BYTES:
+            threading.Thread(target=_rotate_log, daemon=True).start()
     except Exception:
         pass
 
@@ -540,8 +555,14 @@ def _drift_panel() -> None:
     n = len(df)
     half = max(1, n // 2)
     recent_n = min(20, half)
-    baseline_df = df.iloc[:half]
-    recent_df   = df.iloc[n - recent_n:]
+
+    saved_baseline = json.loads(BASELINE_FILE.read_text()) if BASELINE_FILE.exists() else None
+    if saved_baseline:
+        candidate = df[df["ts"] <= pd.Timestamp(saved_baseline["ts"])]
+        baseline_df = candidate if not candidate.empty else df.iloc[:half]
+    else:
+        baseline_df = df.iloc[:half]
+    recent_df = df.iloc[n - recent_n:]
 
     avg_conf     = df["confidence"].mean()
     baseline_conf = baseline_df["confidence"].mean()
@@ -619,7 +640,12 @@ def _drift_panel() -> None:
 
     # ── Footer controls ───────────────────────────────────────────────────────
     st.divider()
-    col_btn, col_info = st.columns([1, 5])
+    col_base, col_btn, col_info = st.columns([2, 1, 4])
+    with col_base:
+        if st.button("Set current predictions as baseline", key="set_baseline", type="secondary"):
+            BASELINE_FILE.parent.mkdir(exist_ok=True)
+            BASELINE_FILE.write_text(json.dumps({"ts": datetime.now().isoformat(), "n": n}))
+            st.success("Baseline updated.")
     with col_btn:
         if st.button("Clear log", type="secondary", key="clear_inf_log"):
             log_path.unlink(missing_ok=True)

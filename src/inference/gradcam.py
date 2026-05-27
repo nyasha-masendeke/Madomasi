@@ -8,34 +8,48 @@ from config import DISEASE_CLASSES, IMAGE_SIZE
 
 
 def compute_gradcam(
-    model_path: str,
+    model_or_path,
     img_bytes: bytes,
     class_idx: int | None = None,
 ) -> dict:
     """Grad-CAM: gradient-weighted class activation heatmap.
 
-    Splits the model into backbone + head sub-models, watches the backbone
-    feature map with GradientTape, and overlays the resulting heatmap on the
-    original image.
+    Builds a preproc_backbone from the outer model's input (which includes the
+    inline preprocess_input call) to the first sub-model's output, so gradients
+    are computed on correctly-preprocessed activations.
 
     Returns dict with keys:
         overlay_png, original_png, class_name, class_idx, confidence, layer_name
     """
     import cv2
 
-    model = tf.keras.models.load_model(model_path)
+    model = (
+        model_or_path if isinstance(model_or_path, tf.keras.Model)
+        else tf.keras.models.load_model(model_or_path)
+    )
 
     sub_models = [l for l in model.layers if isinstance(l, tf.keras.Model)]
     if len(sub_models) < 2:
-        raise ValueError("Expected backbone + head sub-models; got unexpected architecture.")
-    backbone, head = sub_models[0], sub_models[1]
+        raise ValueError(
+            "Grad-CAM requires a model with a separate head sub-model. "
+            "Use train_head() (Stage 2) — models from train_model() or "
+            "train_two_stage() have inline heads and are not supported."
+        )
+    # sub_models[0] = MobileNetV3Small base, sub_models[1] = head
+    # Build from outer model.input so preprocessing is included in the forward pass.
+    preproc_backbone = tf.keras.Model(
+        inputs=model.input,
+        outputs=sub_models[0].output,
+        name="preproc_backbone",
+    )
+    head = sub_models[1]
 
     original_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
     img_resized  = original_img.resize(IMAGE_SIZE, Image.BILINEAR)
     arr = np.expand_dims(np.array(img_resized, dtype=np.float32), axis=0)
 
     with tf.GradientTape() as tape:
-        conv_outputs = backbone(arr, training=False)
+        conv_outputs = preproc_backbone(arr, training=False)   # arr is raw [0,255] — preprocessing inside
         tape.watch(conv_outputs)
         predictions  = head(conv_outputs, training=False)
         if class_idx is None:
@@ -68,5 +82,5 @@ def compute_gradcam(
         "class_name":   cname,
         "class_idx":    int(class_idx),
         "confidence":   float(predictions[0, class_idx]),
-        "layer_name":   backbone.name,
+        "layer_name":   sub_models[0].name,
     }

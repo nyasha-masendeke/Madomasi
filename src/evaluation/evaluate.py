@@ -7,15 +7,21 @@ import tensorflow as tf
 from config import DISEASE_CLASSES, IMAGE_SIZE
 
 
-def evaluate_model(model_path: str, test_dir: str, batch_size: int = 16) -> dict:
+def evaluate_model(model_or_path, test_dir: str, batch_size: int = 16) -> dict:
     """Evaluate a trained model on a held-out test set.
+
+    Args:
+        model_or_path: Loaded tf.keras.Model or path string to a .keras file.
 
     Returns:
         loss, accuracy, confusion_matrix, class_names, report (per-class metrics)
     """
     from sklearn.metrics import confusion_matrix, classification_report
 
-    model = tf.keras.models.load_model(model_path)
+    model = (
+        model_or_path if isinstance(model_or_path, tf.keras.Model)
+        else tf.keras.models.load_model(model_or_path)
+    )
     model.compile(
         optimizer=tf.keras.optimizers.Adam(),
         loss="sparse_categorical_crossentropy",

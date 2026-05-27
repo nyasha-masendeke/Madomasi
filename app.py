@@ -1,15 +1,11 @@
-import importlib
-import streamlit as st
+import os
 
-# Force-reload submodules on every Streamlit script run so that stale
-# in-memory bytecode (from sys.modules) never masks source-code fixes.
-# Reload order matters: leaf modules before their importers.
-import config as _config
-import components.system_dashboard as _sys_dash
-import components.main_ui as _main_ui
-importlib.reload(_config)
-importlib.reload(_sys_dash)
-importlib.reload(_main_ui)
+# Limit TF to 2 threads so extraction/training on the Pi 4 doesn't starve
+# the Streamlit server thread of CPU time. Must be set before TF is imported.
+os.environ.setdefault("TF_NUM_INTRAOP_THREADS", "2")
+os.environ.setdefault("TF_NUM_INTEROP_THREADS", "1")
+
+import streamlit as st
 
 from config import PAGE_CONFIG, inject_css
 

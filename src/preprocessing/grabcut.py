@@ -2,7 +2,10 @@ import numpy as np
 
 
 def grabcut_bg_remove(img_rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Replace background pixels with neutral grey (122, 122, 122) using GrabCut.
+    """Replace background pixels with white (255, 255, 255) using GrabCut.
+
+    White matches the PlantVillage training-image background, preventing the
+    domain shift that neutral grey would introduce at inference time.
 
     Assumes the subject is centred — guaranteed by the browser square-crop step.
 
@@ -25,7 +28,7 @@ def grabcut_bg_remove(img_rgb: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             (mask == cv2.GC_BGD) | (mask == cv2.GC_PR_BGD), 0, 1
         ).astype(np.uint8)
         result = img_rgb.copy()
-        result[fg_mask == 0] = [122, 122, 122]
+        result[fg_mask == 0] = [255, 255, 255]
         return result, fg_mask
     except Exception:
         return img_rgb, np.ones((h, w), np.uint8)

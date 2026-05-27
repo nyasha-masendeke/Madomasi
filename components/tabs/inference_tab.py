@@ -6,6 +6,7 @@ from pathlib import Path
 
 import streamlit as st
 
+from components.model_cache import load_cached_model
 from components.ui_helpers import html, model_picker, model_info_html, model_status_html
 from components.webcam_selector import webcam_selector
 from components.system_dashboard import record_resource_sample
@@ -23,7 +24,8 @@ def run_inference(img_bytes_or_file, model_path: str, confidence: float) -> dict
     try:
         from io import BytesIO
         src    = BytesIO(img_bytes_or_file) if isinstance(img_bytes_or_file, bytes) else img_bytes_or_file
-        result = predict_image(model_path, src, confidence / 100)
+        model  = load_cached_model(model_path)
+        result = predict_image(model, src, confidence / 100)
         try:
             st.session_state["last_img_bytes"]  = (
                 img_bytes_or_file if isinstance(img_bytes_or_file, bytes)
@@ -61,6 +63,9 @@ def run_inference(img_bytes_or_file, model_path: str, confidence: float) -> dict
 # ---------------------------------------------------------------------------
 
 def _prob_bars_html(all_probs: dict, top_disease: str) -> str:
+    sel = st.session_state.get("_selected_classes") or []
+    if sel:
+        all_probs = {k: v for k, v in all_probs.items() if k in sel}
     sorted_probs = sorted(all_probs.items(), key=lambda x: x[1], reverse=True)[:8]
     rows = []
     for cls, prob in sorted_probs:
@@ -170,6 +175,10 @@ def diagnosis_card(result: dict) -> None:
         </div>
     </div>
     """)
+
+    sel = st.session_state.get("_selected_classes") or []
+    if sel and disease not in sel:
+        st.caption("Note: top prediction is outside the selected class filter.")
 
     if not passes:
         st.warning("⚠ Confidence is below your threshold — try a clearer, well-lit image.", icon=None)
@@ -284,14 +293,19 @@ def plot_inference_charts(log: list) -> None:
 # Tab entry point
 # ---------------------------------------------------------------------------
 
-@st.cache_resource
-def _load_cached_model(path: str):
-    import tensorflow as tf
-    return tf.keras.models.load_model(path)
+def _model_has_separate_head(model_path: str) -> bool:
+    """Return True if the model has a separate head sub-model (required for Grad-CAM)."""
+    try:
+        import tensorflow as tf
+        m = load_cached_model(model_path)
+        return sum(1 for l in m.layers if isinstance(l, tf.keras.Model)) >= 2
+    except Exception:
+        return False
 
 
 def render(confidence: float, selected_classes: list) -> None:
     """Render the full Inference tab."""
+    st.session_state["_selected_classes"] = selected_classes
     input_mode = st.radio(
         "Input mode", ["📁 Upload Image", "📷 Live Camera"],
         horizontal=True, label_visibility="collapsed",
@@ -393,21 +407,25 @@ def render(confidence: float, selected_classes: list) -> None:
             if seg_png:
                 with st.expander("GrabCut Segmentation", expanded=True):
                     st.image(seg_png, caption="Leaf after background removal", use_container_width=True)
-                    st.caption("Grey pixels were classified as background by GrabCut and excluded from inference.")
+                    st.caption("White pixels were classified as background by GrabCut and excluded from inference.")
 
             _mpath = st.session_state.get("last_model_path", "")
             if last_result.get("is_leaf", True) and _mpath.endswith(".keras"):
-                if st.button("🔍 Explain with Grad-CAM", key="btn_gradcam", type="secondary"):
-                    _ibytes = st.session_state.get("last_img_bytes")
-                    if _ibytes:
-                        with st.spinner("Computing Grad-CAM gradients…"):
-                            try:
-                                st.session_state["gradcam_result"] = compute_gradcam(
-                                    _mpath, _ibytes,
-                                    class_idx=last_result.get("class_idx"),
-                                )
-                            except Exception as _e:
-                                st.error(f"Grad-CAM failed: {_e}")
+                if _model_has_separate_head(_mpath):
+                    if st.button("🔍 Explain with Grad-CAM", key="btn_gradcam", type="secondary"):
+                        _ibytes = st.session_state.get("last_img_bytes")
+                        if _ibytes:
+                            with st.spinner("Computing Grad-CAM gradients…"):
+                                try:
+                                    model = load_cached_model(_mpath)
+                                    st.session_state["gradcam_result"] = compute_gradcam(
+                                        model, _ibytes,
+                                        class_idx=last_result.get("class_idx"),
+                                    )
+                                except Exception as _e:
+                                    st.error(f"Grad-CAM failed: {_e}")
+                else:
+                    st.caption("Grad-CAM not available — retrain using Stage 2 (train_head) to enable it.")
             if st.session_state.get("gradcam_result"):
                 render_gradcam(st.session_state["gradcam_result"])
 

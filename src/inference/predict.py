@@ -36,14 +36,14 @@ def log_inference(
 
 
 def predict_image(
-    model_path: str,
+    model_or_path,
     image_data,
     confidence_threshold: float = 0.5,
 ) -> dict:
     """Run inference on a single image with GrabCut background removal.
 
     Args:
-        model_path:           Path to a .keras model file.
+        model_or_path:        Loaded tf.keras.Model or path string to a .keras file.
         image_data:           File-like object or path readable by PIL.
         confidence_threshold: Minimum probability to mark a prediction as passing.
 
@@ -51,7 +51,10 @@ def predict_image(
         disease, class_idx, confidence, passes_threshold,
         all_probs, is_leaf, entropy, segmented_png
     """
-    model = tf.keras.models.load_model(model_path)
+    model = (
+        model_or_path if isinstance(model_or_path, tf.keras.Model)
+        else tf.keras.models.load_model(model_or_path)
+    )
 
     img = Image.open(image_data).resize(IMAGE_SIZE, Image.BILINEAR).convert("RGB")
     img_arr, _ = grabcut_bg_remove(np.array(img, dtype=np.uint8))

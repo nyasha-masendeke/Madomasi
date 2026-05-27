@@ -1,13 +1,18 @@
 """Training tab — dataset split, feature extraction, head training, fine-tuning, evaluation, TFLite export."""
 import json
+import threading
 from pathlib import Path
+
+# Module-level lock — persists across Streamlit reruns; prevents duplicate training threads.
+_TRAIN_LOCK = threading.Lock()
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from components.ui_helpers import html, model_picker, detect_dir
+from components.model_cache import load_cached_model
+from components.ui_helpers import html, model_picker, detect_dir, find_models
 from config import DISEASE_DISPLAY
 from pipeline import (
     split_dataset, extract_features, train_head, fine_tune_model,
@@ -186,6 +191,77 @@ def _render_tsne(result: dict) -> None:
 # Model comparison across training runs
 # ---------------------------------------------------------------------------
 
+def _build_excel(rows: list) -> bytes:
+    """Build an Excel workbook from all training run histories and return as bytes."""
+    import io
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.utils import get_column_letter
+
+    wb = openpyxl.Workbook()
+
+    # ── Sheet 1: Summary ──────────────────────────────────────────────────
+    ws = wb.active
+    ws.title = "Summary"
+    hdr_fill = PatternFill("solid", fgColor="C1121F")
+    hdr_font = Font(bold=True, color="FFFFFF")
+
+    summary_cols = ["Run", "Stage", "Epochs", "Best Epoch", "Best Val Acc", "Final Val Acc"]
+    for col, name in enumerate(summary_cols, 1):
+        cell = ws.cell(row=1, column=col, value=name)
+        cell.fill = hdr_fill
+        cell.font = hdr_font
+        cell.alignment = Alignment(horizontal="center")
+
+    for r_idx, row in enumerate(rows, 2):
+        ws.cell(r_idx, 1, row["Run"])
+        ws.cell(r_idx, 2, row["Stage"])
+        ws.cell(r_idx, 3, row["Epochs"])
+        ws.cell(r_idx, 4, row["Best Epoch"])
+        ws.cell(r_idx, 5, row["Best Val Acc"])
+        ws.cell(r_idx, 6, row["Final Val Acc"])
+
+    for col in range(1, len(summary_cols) + 1):
+        ws.column_dimensions[get_column_letter(col)].auto_size = True
+
+    # ── Per-run sheets: one sheet per history file ────────────────────────
+    epoch_cols = ["Epoch", "Train Accuracy", "Val Accuracy", "Train Loss", "Val Loss"]
+    for row in rows:
+        try:
+            hist = json.loads(Path(row["_hist"]).read_text())
+        except Exception:
+            continue
+
+        sheet_name = f"{row['Run']} {row['Stage']}"[:31]  # Excel limit
+        ws2 = wb.create_sheet(title=sheet_name)
+
+        for col, name in enumerate(epoch_cols, 1):
+            cell = ws2.cell(row=1, column=col, value=name)
+            cell.fill = hdr_fill
+            cell.font = hdr_font
+            cell.alignment = Alignment(horizontal="center")
+
+        epochs    = hist.get("epoch", [])
+        train_acc = hist.get("accuracy", [])
+        val_acc   = hist.get("val_accuracy", [])
+        train_los = hist.get("loss", [])
+        val_los   = hist.get("val_loss", [])
+
+        for i, ep in enumerate(epochs):
+            ws2.cell(i + 2, 1, ep)
+            ws2.cell(i + 2, 2, train_acc[i] if i < len(train_acc) else None)
+            ws2.cell(i + 2, 3, val_acc[i]   if i < len(val_acc)   else None)
+            ws2.cell(i + 2, 4, train_los[i] if i < len(train_los) else None)
+            ws2.cell(i + 2, 5, val_los[i]   if i < len(val_los)   else None)
+
+        for col in range(1, len(epoch_cols) + 1):
+            ws2.column_dimensions[get_column_letter(col)].width = 18
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def _render_model_comparison() -> None:
     outputs_base = Path("outputs")
     rows = []
@@ -225,6 +301,15 @@ def _render_model_comparison() -> None:
     display_cols = ["Run", "Stage", "Epochs", "Best Epoch", "Best Val Acc", "Final Val Acc"]
     st.dataframe([{k: r[k] for k in display_cols} for r in rows],
                  hide_index=True, width="stretch")
+
+    # ── Excel export ──────────────────────────────────────────────────────
+    st.download_button(
+        label="Download results as Excel",
+        data=_build_excel(rows),
+        file_name="madomasi_training_results.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="secondary",
+    )
 
     with st.expander("Val accuracy comparison chart"):
         fig = go.Figure()
@@ -328,12 +413,93 @@ def _render_confusion_matrix(ev: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Live training progress fragment (polls session state every 2 s)
+# ---------------------------------------------------------------------------
+
+@st.fragment(run_every="2s")
+def _training_live_panel() -> None:
+    """Renders live training/extraction progress without blocking the page.
+
+    Checks _stage_state (extract/split) and _train_state (head/finetune) so
+    every long-running stage keeps the panel alive while the server thread is free.
+    """
+    stage_state = st.session_state.get("_stage_state", {})
+    train_state = st.session_state.get("_train_state", {})
+
+    # ── Non-training stage (extract / split) ──────────────────────────────
+    if stage_state.get("active"):
+        st.progress(min(stage_state.get("progress", 0.0), 1.0),
+                    text=stage_state.get("text", "Working…"))
+        return
+
+    # Show result once a non-training stage finishes
+    stage_result = st.session_state.pop("_stage_result", None)
+    if stage_result:
+        if stage_result["success"]:
+            st.success(stage_result["message"])
+        else:
+            st.error(f"Stage failed: {stage_result['message']}")
+
+    # ── Keras training stage (head / finetune) ────────────────────────────
+    if not train_state or not train_state.get("history", {}).get("epoch"):
+        from components.ui_helpers import load_latest_history
+        hist = load_latest_history() or st.session_state.get("train_history")
+        if hist and hist.get("epoch"):
+            plot_learning_curves(hist)
+        else:
+            html(
+                '<div class="empty-state">'
+                '<span class="empty-state-icon">📈</span>'
+                '<div class="empty-state-title">No training history yet</div>'
+                '<div class="empty-state-sub">Run a training stage — live curves appear here</div>'
+                '</div>'
+            )
+        return
+
+    progress = train_state.get("progress", 0.0)
+    text     = train_state.get("text", "")
+    history  = train_state.get("history", {})
+    logs     = train_state.get("logs", {})
+    active   = train_state.get("active", False)
+
+    st.progress(min(progress, 1.0), text=text)
+
+    if logs:
+        acc      = logs.get("accuracy")
+        loss_val = logs.get("loss")
+        val_acc  = logs.get("val_accuracy")
+        val_loss = logs.get("val_loss")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Train Acc",  f"{acc:.3f}"      if acc      is not None else "—")
+        m2.metric("Train Loss", f"{loss_val:.4f}" if loss_val is not None else "—")
+        m3.metric("Val Acc",    f"{val_acc:.3f}"  if val_acc  is not None else "—")
+        m4.metric("Val Loss",   f"{val_loss:.4f}" if val_loss is not None else "—")
+
+    if history.get("epoch"):
+        plot_learning_curves(history)
+
+    if not active:
+        result = st.session_state.pop("_train_result", None)
+        if result:
+            if result["success"]:
+                st.success(result["message"])
+            else:
+                st.error(f"Stage failed: {result['message']}")
+
+
+# ---------------------------------------------------------------------------
 # Tab entry point
 # ---------------------------------------------------------------------------
 
 def render() -> None:
     """Render the full Training tab."""
     from components.system_dashboard import record_resource_sample
+
+    # Invalidate model-list cache if a background training thread completed.
+    # The thread cannot call find_models.clear() directly — @st.cache_data's
+    # TTLCache is not thread-safe. The dirty flag bridges thread → main thread.
+    if st.session_state.pop("_models_dirty", False):
+        find_models.clear()
 
     # ── Session defaults ──────────────────────────────────────────────────────
     if "shared_data_dir" not in st.session_state:
@@ -366,38 +532,7 @@ def render() -> None:
     # ── Right: live training output ───────────────────────────────────────────
     with col_right:
         st.subheader("Live Training Curves")
-        progress_bar        = st.empty()
-        metrics_placeholder = st.empty()
-        chart_placeholder   = st.empty()
-
-        if not st.session_state.get("training_active"):
-            from components.ui_helpers import load_latest_history
-            hist = load_latest_history() or st.session_state.get("train_history")
-            if hist and hist.get("epoch"):
-                st.session_state["train_history"] = hist
-
-                def _last(seq):
-                    vals = [v for v in (seq or []) if v is not None]
-                    return vals[-1] if vals else None
-
-                with metrics_placeholder:
-                    m1, m2, m3, m4 = st.columns(4)
-                    m1.metric("Epoch",     hist["epoch"][-1])
-                    m2.metric("Train Acc", f"{_last(hist.get('accuracy')):.3f}"     if _last(hist.get("accuracy"))    is not None else "—")
-                    m3.metric("Val Acc",   f"{_last(hist.get('val_accuracy')):.3f}" if _last(hist.get("val_accuracy")) is not None else "—")
-                    m4.metric("Val Loss",  f"{_last(hist.get('val_loss')):.4f}"     if _last(hist.get("val_loss"))     is not None else "—")
-
-                with chart_placeholder:
-                    plot_learning_curves(hist)
-            else:
-                with chart_placeholder:
-                    html(
-                        '<div class="empty-state">'
-                        '<span class="empty-state-icon">📈</span>'
-                        '<div class="empty-state-title">No training history yet</div>'
-                        '<div class="empty-state-sub">Run a training stage — live curves appear here</div>'
-                        '</div>'
-                    )
+        _training_live_panel()
 
     # ── Left: pipeline stages ─────────────────────────────────────────────────
     with col_left:
@@ -547,6 +682,9 @@ def render() -> None:
         _feat_dir = st.session_state.get("features_dir")
         if not _feat_dir or not Path(_feat_dir).exists():
             st.error("Features directory not found. Run Feature Extraction first.")
+        elif "_class_weights" not in st.session_state:
+            st.warning("Run the data split (Stage 0) first to compute class weights.")
+            st.stop()
         else:
             st.session_state.update({
                 "training_active": True, "_active_stage": "head",
@@ -572,104 +710,198 @@ def render() -> None:
 
     # ── Active training ────────────────────────────────────────────────────────
     if st.session_state.get("training_active", False):
-        stage               = st.session_state.get("_active_stage", "")
+        stage = st.session_state.get("_active_stage", "")
         record_resource_sample("Training")
-        progress_bar        = st.progress(0, text="Initialising…")
-        metrics_placeholder = st.empty()
-        chart_placeholder   = st.empty()
 
-        try:
-            if stage == "split":
-                def _split_prog(current, total, class_name):
-                    progress_bar.progress(current / max(total, 1),
-                                          text=f"Splitting {current}/{total}: {class_name}")
-                with st.spinner("Splitting dataset into train / val / test…"):
-                    result = split_dataset(
-                        source_dir  = st.session_state["_raw_source"],
-                        output_dir  = st.session_state["_split_output"],
-                        train_ratio = st.session_state["_train_ratio"],
-                        val_ratio   = st.session_state["_val_ratio"],
-                        test_ratio  = st.session_state["_test_ratio"],
-                        progress_fn = _split_prog,
-                    )
-                st.session_state.split_train_dir = result["train_dir"]
-                st.session_state.split_val_dir   = result["val_dir"]
-                st.session_state.split_test_dir  = result["test_dir"]
-                st.session_state.pop("shared_data_dir", None)
-                try:
-                    st.session_state.class_balance = check_class_balance(result["train_dir"])
-                except Exception:
-                    pass
-                progress_bar.progress(1.0, text="Split complete")
-                c = result["counts"]
-                st.success(
-                    f"{result['num_classes']} classes — "
-                    f"train: {c['train']} · val: {c['val']} · test: {c['test']} images"
-                )
+        from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+        ctx = get_script_run_ctx()
 
-            elif stage == "extract":
-                def _ext_prog(current, total):
-                    progress_bar.progress(min(current / max(total, 1), 1.0),
-                                          text=f"Extracting batch {current}/{total}")
-                with st.spinner("Extracting MobileNetV3 features…"):
-                    result = extract_features(
-                        data_dir    = st.session_state["_data_dir"],
-                        output_dir  = st.session_state["_feat_out"],
-                        batch_size  = st.session_state["_batch_size"],
-                        progress_fn = _ext_prog,
-                    )
-                st.session_state.features_dir = result["features_dir"]
-                progress_bar.progress(1.0, text="Extraction complete")
-                st.success(
-                    f"{result['num_samples']} samples · {result['num_classes']} classes · "
-                    f"shape {result['feature_shape']} → `{result['features_dir']}`"
-                )
+        if stage == "split" and not st.session_state.get("_train_thread_active"):
+            if _TRAIN_LOCK.acquire(blocking=False):
+                st.session_state["_train_thread_active"] = True
+                st.session_state["_stage_state"] = {"progress": 0.0, "text": "Initialising split…", "active": True}
 
-            elif stage == "head":
-                cb = StreamlitTrainCallback(
-                    progress_bar, metrics_placeholder, chart_placeholder,
-                    stage_label="Train Head",
-                )
-                with st.spinner("Training classification head…"):
-                    result = train_head(
-                        features_dir = st.session_state["features_dir"],
-                        epochs       = st.session_state["_head_epochs"],
-                        lr           = st.session_state["_head_lr"],
-                        output_path  = st.session_state["_model_save_base"],
-                        callbacks    = [cb],
-                    )
-                st.session_state.head_full_path = result["full_model_path"]
-                st.session_state.train_history  = cb.history
-                record_resource_sample("Training")
-                _save_learning_curves(cb.history, result["full_model_path"],
-                                      output_dir=cb.output_dir)
-                st.success(f"Head trained → `{result['full_model_path']}`")
+                def _run_split():
+                    _success = False
+                    def _split_prog(current, total, class_name):
+                        st.session_state["_stage_state"] = {
+                            "progress": current / max(total, 1),
+                            "text":     f"Splitting {current}/{total}: {class_name}",
+                            "active":   True,
+                        }
+                    try:
+                        result = split_dataset(
+                            source_dir  = st.session_state["_raw_source"],
+                            output_dir  = st.session_state["_split_output"],
+                            train_ratio = st.session_state["_train_ratio"],
+                            val_ratio   = st.session_state["_val_ratio"],
+                            test_ratio  = st.session_state["_test_ratio"],
+                            progress_fn = _split_prog,
+                        )
+                        st.session_state.split_train_dir = result["train_dir"]
+                        st.session_state.split_val_dir   = result["val_dir"]
+                        st.session_state.split_test_dir  = result["test_dir"]
+                        st.session_state.pop("shared_data_dir", None)
+                        try:
+                            balance     = check_class_balance(result["train_dir"])
+                            st.session_state.class_balance = balance
+                            class_names = sorted(balance["classes"])
+                            st.session_state["_class_weights"] = {
+                                i: balance["weights"][cls] for i, cls in enumerate(class_names)
+                            }
+                        except Exception:
+                            pass
+                        c = result["counts"]
+                        st.session_state["_stage_result"] = {
+                            "success": True,
+                            "message": (
+                                f"{result['num_classes']} classes — "
+                                f"train: {c['train']} · val: {c['val']} · test: {c['test']} images"
+                            ),
+                        }
+                        _success = True
+                    except Exception as exc:
+                        st.session_state["_stage_result"] = {"success": False, "message": str(exc)}
+                    finally:
+                        _TRAIN_LOCK.release()
+                        load_cached_model.clear()
+                        st.session_state["_models_dirty"]        = True
+                        st.session_state["training_active"]      = False
+                        st.session_state["_train_thread_active"] = False
+                        st.session_state["_stage_state"] = {
+                            "progress": 1.0,
+                            "text":     "Done" if _success else "Failed",
+                            "active":   False,
+                        }
 
-            elif stage == "finetune":
-                cb = StreamlitTrainCallback(
-                    progress_bar, metrics_placeholder, chart_placeholder,
-                    stage_label="Fine-Tuning",
-                )
-                with st.spinner("Fine-tuning end-to-end…"):
-                    result = fine_tune_model(
-                        model_path = st.session_state["head_full_path"],
-                        data_dir   = st.session_state["_data_dir"],
-                        batch_size = st.session_state["_batch_size"],
-                        epochs     = st.session_state["_ft_epochs"],
-                        lr         = st.session_state["_ft_lr"],
-                        callbacks  = [cb],
-                    )
-                st.session_state.fine_tuned_path = result["path"]
-                st.session_state.train_history   = cb.history
-                record_resource_sample("Training")
-                _save_learning_curves(cb.history, result["path"], output_dir=cb.output_dir)
-                st.success(f"Fine-tuned model → `{result['path']}`")
+                t = threading.Thread(target=_run_split, daemon=True)
+                add_script_run_ctx(t, ctx)
+                t.start()
 
-        except Exception as e:
-            st.error(f"Stage failed: {e}")
-        finally:
-            st.session_state.training_active = False
-            st.rerun()
+        elif stage == "extract" and not st.session_state.get("_train_thread_active"):
+            if _TRAIN_LOCK.acquire(blocking=False):
+                st.session_state["_train_thread_active"] = True
+                st.session_state["_stage_state"] = {"progress": 0.0, "text": "Initialising extraction…", "active": True}
+
+                def _run_extract():
+                    _success = False
+                    def _ext_prog(current, total):
+                        st.session_state["_stage_state"] = {
+                            "progress": min(current / max(total, 1), 1.0),
+                            "text":     f"Extracting batch {current}/{total}",
+                            "active":   True,
+                        }
+                    try:
+                        result = extract_features(
+                            data_dir    = st.session_state["_data_dir"],
+                            output_dir  = st.session_state["_feat_out"],
+                            batch_size  = st.session_state["_batch_size"],
+                            progress_fn = _ext_prog,
+                        )
+                        st.session_state.features_dir = result["features_dir"]
+                        st.session_state["_stage_result"] = {
+                            "success": True,
+                            "message": (
+                                f"{result['num_samples']} samples · {result['num_classes']} classes · "
+                                f"shape {result['feature_shape']} → `{result['features_dir']}`"
+                            ),
+                        }
+                        _success = True
+                    except Exception as exc:
+                        st.session_state["_stage_result"] = {"success": False, "message": str(exc)}
+                    finally:
+                        _TRAIN_LOCK.release()
+                        load_cached_model.clear()
+                        st.session_state["_models_dirty"]        = True
+                        st.session_state["training_active"]      = False
+                        st.session_state["_train_thread_active"] = False
+                        st.session_state["_stage_state"] = {
+                            "progress": 1.0,
+                            "text":     "Done" if _success else "Failed",
+                            "active":   False,
+                        }
+
+                t = threading.Thread(target=_run_extract, daemon=True)
+                add_script_run_ctx(t, ctx)
+                t.start()
+
+        elif stage in ("head", "finetune"):
+            # Run model.fit() in a background thread so the Streamlit server thread
+            # stays free — this keeps the System Dashboard responsive during training.
+            if not st.session_state.get("_train_thread_active"):
+                if _TRAIN_LOCK.acquire(blocking=False):
+                    st.session_state["_train_thread_active"] = True
+
+                    if stage == "head":
+                        _cw = st.session_state.get("_class_weights")
+
+                        def _run():
+                            try:
+                                cb = StreamlitTrainCallback(stage_label="Train Head")
+                                result = train_head(
+                                    features_dir  = st.session_state["features_dir"],
+                                    epochs        = st.session_state["_head_epochs"],
+                                    lr            = st.session_state["_head_lr"],
+                                    output_path   = st.session_state["_model_save_base"],
+                                    callbacks     = [cb],
+                                    class_weights = _cw,
+                                )
+                                st.session_state.head_full_path = result["full_model_path"]
+                                st.session_state.train_history  = cb.history
+                                record_resource_sample("Training")
+                                _save_learning_curves(cb.history, result["full_model_path"],
+                                                      output_dir=cb.output_dir)
+                                st.session_state["_train_result"] = {
+                                    "success": True,
+                                    "message": f"Head trained → `{result['full_model_path']}`",
+                                }
+                            except Exception as exc:
+                                st.session_state["_train_result"] = {"success": False, "message": str(exc)}
+                            finally:
+                                _TRAIN_LOCK.release()
+                                load_cached_model.clear()
+                                st.session_state["_models_dirty"]        = True
+                                st.session_state["training_active"]      = False
+                                st.session_state["_train_thread_active"] = False
+                                state = st.session_state.get("_train_state", {})
+                                st.session_state["_train_state"] = {**state, "active": False}
+                    else:
+                        _cw = st.session_state.get("_class_weights")
+
+                        def _run():
+                            try:
+                                cb = StreamlitTrainCallback(stage_label="Fine-Tuning")
+                                result = fine_tune_model(
+                                    model_path    = st.session_state["head_full_path"],
+                                    data_dir      = st.session_state["_data_dir"],
+                                    batch_size    = st.session_state["_batch_size"],
+                                    epochs        = st.session_state["_ft_epochs"],
+                                    lr            = st.session_state["_ft_lr"],
+                                    callbacks     = [cb],
+                                    class_weights = _cw,
+                                )
+                                st.session_state.fine_tuned_path = result["path"]
+                                st.session_state.train_history   = cb.history
+                                record_resource_sample("Training")
+                                _save_learning_curves(cb.history, result["path"], output_dir=cb.output_dir)
+                                st.session_state["_train_result"] = {
+                                    "success": True,
+                                    "message": f"Fine-tuned model → `{result['path']}`",
+                                }
+                            except Exception as exc:
+                                st.session_state["_train_result"] = {"success": False, "message": str(exc)}
+                            finally:
+                                _TRAIN_LOCK.release()
+                                load_cached_model.clear()
+                                st.session_state["_models_dirty"]        = True
+                                st.session_state["training_active"]      = False
+                                st.session_state["_train_thread_active"] = False
+                                state = st.session_state.get("_train_state", {})
+                                st.session_state["_train_state"] = {**state, "active": False}
+
+                    t = threading.Thread(target=_run, daemon=True)
+                    add_script_run_ctx(t, ctx)
+                    t.start()
 
     # ── Evaluation ────────────────────────────────────────────────────────────
     eval_done = bool(st.session_state.get("eval_result"))

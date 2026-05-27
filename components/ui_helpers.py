@@ -13,6 +13,7 @@ def html(raw: str) -> None:
     st.markdown(compact, unsafe_allow_html=True)
 
 
+@st.cache_data(ttl=60)
 def find_models() -> list[str]:
     base = Path("models/trained")
     if not base.exists():
@@ -76,6 +77,7 @@ def model_status_html(path: str) -> str:
     return f'<span class="model-status-missing">{dot} Model Not Found</span>'
 
 
+@st.cache_data(ttl=3)
 def load_latest_history() -> dict:
     import json
     base = Path("outputs")

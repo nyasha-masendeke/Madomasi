@@ -60,7 +60,7 @@ def load_datasets(data_dir: str, batch_size: int, val_split: float = 0.2):
 # ---------------------------------------------------------------------------
 
 def build_model(num_classes: int, freeze_base: bool = True) -> tf.keras.Model:
-    """MobileNetV3Small backbone with a GAP + Dropout + Dense head."""
+    """MobileNetV3Small backbone with a GAP + BatchNorm + Dense(256) + Dropout + Dense head."""
     base = tf.keras.applications.MobileNetV3Small(
         input_shape=(*IMAGE_SIZE, 3), include_top=False, weights="imagenet"
     )
@@ -70,6 +70,8 @@ def build_model(num_classes: int, freeze_base: bool = True) -> tf.keras.Model:
     x       = tf.keras.applications.mobilenet_v3.preprocess_input(inputs)
     x       = base(x, training=not freeze_base)
     x       = tf.keras.layers.GlobalAveragePooling2D()(x)
+    x       = tf.keras.layers.BatchNormalization()(x)
+    x       = tf.keras.layers.Dense(256, activation="relu")(x)
     x       = tf.keras.layers.Dropout(DROPOUT_RATE)(x)
     outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
     return tf.keras.Model(inputs, outputs)

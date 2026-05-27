@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 import tensorflow as tf
 
-from config import IMAGE_SIZE, EARLY_STOPPING_PATIENCE
+from config import IMAGE_SIZE, EARLY_STOPPING_PATIENCE, DROPOUT_RATE
 from src.training.data import load_datasets, build_model, next_training_output_dir
 
 
@@ -88,6 +88,7 @@ def train_head(
     val_split: float = 0.2,
     output_path: str = "models/trained/latest.keras",
     callbacks=None,
+    class_weights: dict | None = None,
 ) -> dict:
     """Train a classification head on top of the cached feature maps.
 
@@ -112,7 +113,9 @@ def train_head(
 
     inputs  = tf.keras.Input(shape=feature_shape)
     x       = tf.keras.layers.GlobalAveragePooling2D()(inputs)
-    x       = tf.keras.layers.Dropout(0.3)(x)
+    x       = tf.keras.layers.BatchNormalization()(x)
+    x       = tf.keras.layers.Dense(256, activation="relu")(x)
+    x       = tf.keras.layers.Dropout(DROPOUT_RATE)(x)
     outputs = tf.keras.layers.Dense(num_classes, activation="softmax")(x)
     head    = tf.keras.Model(inputs, outputs)
 
@@ -132,6 +135,7 @@ def train_head(
         epochs=epochs,
         validation_split=val_split,
         shuffle=True,
+        class_weight=class_weights,
         callbacks=(callbacks or []) + [
             tf.keras.callbacks.ModelCheckpoint(
                 str(head_path), monitor="val_accuracy",
@@ -185,33 +189,78 @@ def fine_tune_model(
     batch_size: int = 16,
     epochs: int = 10,
     lr: float = 0.00001,
+    unfreeze_layers: int = 20,
     output_path: str = "models/trained/latest.keras",
     callbacks=None,
+    class_weights: dict | None = None,
 ) -> dict:
     """Fine-tune the full model end-to-end at a very low learning rate.
 
-    Unfreezes the MobileNetV3Small base so ImageNet features adapt to
-    tomato-leaf patterns without catastrophic forgetting (Keras guide, stage 3).
+    Unfreezes the last `unfreeze_layers` layers of the MobileNetV3Small base so
+    ImageNet features adapt to tomato-leaf patterns without catastrophic forgetting.
+    Uses the held-out val/ split when available, falling back to an 80/20 split.
 
     Returns:
         model, path, history
     """
+    if unfreeze_layers <= 0:
+        raise ValueError("unfreeze_layers must be a positive integer")
+
     model = tf.keras.models.load_model(model_path)
-    model.layers[1].trainable = True
+    base_layer = next((l for l in model.layers if isinstance(l, tf.keras.Model)), None)
+    if base_layer is None:
+        raise ValueError("No sub-model found in model.layers — cannot unfreeze base.")
+    for layer in base_layer.layers[:-unfreeze_layers]:
+        layer.trainable = False
+    for layer in base_layer.layers[-unfreeze_layers:]:
+        layer.trainable = True
+
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=lr),
         loss="sparse_categorical_crossentropy",
         metrics=["accuracy"],
     )
 
-    train_ds, val_ds = load_datasets(data_dir, batch_size)
-    run_dir  = Path(model_path).parent
-    ft_path  = run_dir / "fine_tuned.keras"
+    val_dir = Path(data_dir).parent / "val"
+    if val_dir.exists():
+        raw_train = tf.keras.utils.image_dataset_from_directory(
+            data_dir, image_size=IMAGE_SIZE, batch_size=batch_size,
+            label_mode="int", shuffle=True, seed=42,
+        )
+        class_names = raw_train.class_names   # save before prefetch — PrefetchDataset drops this attr
+        train_ds = raw_train.prefetch(tf.data.AUTOTUNE)
+        train_ds.class_names = class_names
+
+        raw_val = tf.keras.utils.image_dataset_from_directory(
+            str(val_dir), image_size=IMAGE_SIZE, batch_size=batch_size,
+            label_mode="int", shuffle=False,
+        )
+        if list(raw_val.class_names) != list(class_names):
+            train_ds, val_ds = load_datasets(data_dir, batch_size)
+        else:
+            val_ds = raw_val.prefetch(tf.data.AUTOTUNE)
+            val_ds.class_names = class_names
+    else:
+        train_ds, val_ds = load_datasets(data_dir, batch_size)
+
+    augment = tf.keras.Sequential([
+        tf.keras.layers.RandomFlip("horizontal"),
+        tf.keras.layers.RandomRotation(0.1),
+        tf.keras.layers.RandomBrightness(0.15),
+    ], name="augmentation")
+    train_ds = train_ds.map(
+        lambda x, y: (augment(x, training=True), y),
+        num_parallel_calls=tf.data.AUTOTUNE,
+    )
+
+    run_dir = Path(model_path).parent
+    ft_path = run_dir / "fine_tuned.keras"
 
     keras_hist = model.fit(
         train_ds,
         epochs=epochs,
         validation_data=val_ds,
+        class_weight=class_weights,
         callbacks=(callbacks or []) + [
             tf.keras.callbacks.ModelCheckpoint(
                 str(ft_path), monitor="val_accuracy",
@@ -292,6 +341,7 @@ def train_two_stage(
     output_path="models/trained/latest.keras",
     fe_callbacks=None,
     ft_callbacks=None,
+    class_weights: dict | None = None,
 ):
     """Two-stage transfer learning: feature extraction then fine-tuning."""
     train_ds, val_ds = load_datasets(data_dir, batch_size)
@@ -321,6 +371,7 @@ def train_two_stage(
     )
     model.fit(
         train_ds, epochs=fe_epochs, validation_data=val_ds,
+        class_weight=class_weights,
         callbacks=(fe_callbacks or []) + [
             tf.keras.callbacks.ModelCheckpoint(
                 str(fe_path), monitor="val_accuracy",
@@ -332,7 +383,10 @@ def train_two_stage(
     )
 
     model = tf.keras.models.load_model(str(fe_path))
-    model.layers[1].trainable = True
+    base_layer = next((l for l in model.layers if isinstance(l, tf.keras.Model)), None)
+    if base_layer is None:
+        raise ValueError("No sub-model found in model.layers — cannot unfreeze base.")
+    base_layer.trainable = True
     model.compile(
         optimizer=tf.keras.optimizers.Adam(learning_rate=ft_lr),
         loss="sparse_categorical_crossentropy",
@@ -340,6 +394,7 @@ def train_two_stage(
     )
     model.fit(
         train_ds, epochs=ft_epochs, validation_data=val_ds,
+        class_weight=class_weights,
         callbacks=(ft_callbacks or []) + [
             tf.keras.callbacks.ModelCheckpoint(
                 str(ft_path), monitor="val_accuracy",
