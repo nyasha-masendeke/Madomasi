@@ -11,11 +11,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements-backend.txt requirements-frontend.txt ./
-RUN pip install --no-cache-dir \
-    -r requirements-backend.txt \
-    -r requirements-frontend.txt
+# Install Python dependencies in two layers so a change to one requirements
+# file doesn't invalidate the other's installed packages. Backend is heavy
+# (tensorflow, opencv) and rarely changes; frontend is light and changes more
+# often. BuildKit cache mount keeps pip's download cache between rebuilds.
+COPY requirements-backend.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-backend.txt
+
+COPY requirements-frontend.txt ./
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements-frontend.txt
 
 # Copy application source (data/models/outputs are mounted as volumes)
 COPY app.py config.py pipeline.py streamlit_callback.py main.py ./
