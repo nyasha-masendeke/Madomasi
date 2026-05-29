@@ -102,7 +102,7 @@ class ResourceLogger(tf.keras.callbacks.Callback):
         t_mean,   t_max   = _stats("temp")
 
         d = self._data
-        d["epoch"].append(int(epoch))
+        d["epoch"].append(int(epoch) + 1)  # match history's 1-indexed epoch column
         d["epoch_seconds"].append(round(elapsed, 3))
         d["cpu_percent_mean"].append(round(cpu_mean, 2))
         d["cpu_percent_max"].append(round(cpu_max, 2))
