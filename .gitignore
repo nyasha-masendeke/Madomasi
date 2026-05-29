@@ -24,9 +24,15 @@ data/features_3class/
 # Outputs
 outputs/*.html
 outputs/*.png
+outputs/*.xlsx
 outputs/inference_log.jsonl
-outputs/Training*/
 outputs/training_curves/
+
+# Per-run training logs: track only JSON metrics/resources, ignore models & HTML
+outputs/Training*/**
+!outputs/Training*/
+!outputs/Training*/**/
+!outputs/Training*/**/*.json
 
 # IDE & OS
 .vscode/
