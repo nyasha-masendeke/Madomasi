@@ -13,13 +13,16 @@ def html(raw: str) -> None:
     st.markdown(compact, unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=60)
 def find_models() -> list[str]:
-    base = Path("models/trained")
+    base = Path("models")
     if not base.exists():
         return []
+    paths = [
+        p for p in base.rglob("*")
+        if p.suffix.lower() in (".keras", ".h5", ".tflite") and p.name != "head.keras"
+    ]
     return sorted(
-        [str(p) for p in base.rglob("*.keras")],
+        [str(p) for p in paths],
         key=lambda p: Path(p).stat().st_mtime,
         reverse=True,
     )
@@ -32,27 +35,16 @@ def detect_dir(candidates: list[str], fallback: str = "") -> str:
     return fallback
 
 
-def model_picker(label: str, key: str, default: str = "models/trained/latest.keras") -> str:
+def model_picker(label: str, key: str, default: str = "") -> str:
     available = find_models()
-    CUSTOM = "Custom path..."
-    if available:
-        choice = st.selectbox(
-            label,
-            options=available + [CUSTOM],
-            format_func=lambda x: Path(x).name if x != CUSTOM else CUSTOM,
-            key=f"{key}_select",
-        )
-        if choice == CUSTOM:
-            return st.text_input(
-                "Custom model path", "", key=f"{key}_custom",
-                placeholder="models/trained/run_xxx/stage2_ft.keras",
-            )
-        return choice
-    detected = detect_dir([default, "models/trained/latest.keras"], fallback="")
-    return st.text_input(
-        label, detected,
-        placeholder="models/trained/run_xxx/stage2_ft.keras",
-        key=key,
+    if not available:
+        st.warning("No trained models found under `models/`. Train a model first.")
+        return ""
+    return st.selectbox(
+        label,
+        options=available,
+        format_func=lambda x: str(Path(x).relative_to("models")),
+        key=f"{key}_select",
     )
 
 

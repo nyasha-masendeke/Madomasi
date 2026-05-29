@@ -12,7 +12,7 @@ import streamlit as st
 from plotly.subplots import make_subplots
 
 from components.model_cache import load_cached_model
-from components.ui_helpers import html, model_picker, detect_dir, find_models
+from components.ui_helpers import html, model_picker, detect_dir
 from config import DISEASE_DISPLAY
 from pipeline import (
     split_dataset, extract_features, train_head, fine_tune_model,
@@ -495,11 +495,7 @@ def render() -> None:
     """Render the full Training tab."""
     from components.system_dashboard import record_resource_sample
 
-    # Invalidate model-list cache if a background training thread completed.
-    # The thread cannot call find_models.clear() directly — @st.cache_data's
-    # TTLCache is not thread-safe. The dirty flag bridges thread → main thread.
-    if st.session_state.pop("_models_dirty", False):
-        find_models.clear()
+    st.session_state.pop("_models_dirty", False)
 
     # ── Session defaults ──────────────────────────────────────────────────────
     if "shared_data_dir" not in st.session_state:
