@@ -19,6 +19,7 @@ data/raw/
 !data/raw/.gitkeep
 data/splits/
 data/features/*.npy
+data/features_3class/
 
 # Outputs
 outputs/*.html
