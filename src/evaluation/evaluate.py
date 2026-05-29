@@ -5,23 +5,30 @@ import numpy as np
 import tensorflow as tf
 
 from config import DISEASE_CLASSES, IMAGE_SIZE
+from src.inference.predict import load_class_names
 
 
-def evaluate_model(model_or_path, test_dir: str, batch_size: int = 16) -> dict:
+def evaluate_model(
+    model_or_path,
+    test_dir: str,
+    batch_size: int = 16,
+    class_names: list[str] | None = None,
+) -> dict:
     """Evaluate a trained model on a held-out test set.
 
     Args:
         model_or_path: Loaded tf.keras.Model or path string to a .keras file.
+        class_names:   Optional canonical class names matching the model's
+                       output order. If omitted, resolved via
+                       `load_class_names()` next to the model file.
 
     Returns:
         loss, accuracy, confusion_matrix, class_names, report (per-class metrics)
     """
     from sklearn.metrics import confusion_matrix, classification_report
 
-    model = (
-        model_or_path if isinstance(model_or_path, tf.keras.Model)
-        else tf.keras.models.load_model(model_or_path)
-    )
+    is_path = not isinstance(model_or_path, tf.keras.Model)
+    model = tf.keras.models.load_model(model_or_path) if is_path else model_or_path
     model.compile(
         optimizer=tf.keras.optimizers.Adam(),
         loss="sparse_categorical_crossentropy",
@@ -43,11 +50,13 @@ def evaluate_model(model_or_path, test_dir: str, batch_size: int = 16) -> dict:
         y_pred.extend(np.argmax(preds, axis=1).tolist())
         y_true.extend(labels.numpy().tolist())
 
-    class_names_raw = sorted([p.name for p in Path(test_dir).iterdir() if p.is_dir()])
-    class_names = [
-        DISEASE_CLASSES[i] if i < len(DISEASE_CLASSES) else n
-        for i, n in enumerate(class_names_raw)
-    ]
+    num_classes = int(model.output_shape[-1])
+    if class_names is None:
+        class_names = (
+            load_class_names(model_or_path, fallback_len=num_classes)
+            if is_path else list(DISEASE_CLASSES)
+        )
+    class_names = list(class_names)[:num_classes]
 
     cm     = confusion_matrix(y_true, y_pred).tolist()
     report = classification_report(

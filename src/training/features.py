@@ -171,6 +171,10 @@ def train_head(
     full_path = run_dir / "head_full.keras"
     full.save(str(full_path))
 
+    class_names = list(meta.get("class_names") or [])
+    if class_names:
+        (run_dir / "class_names.json").write_text(json.dumps(class_names))
+
     return {
         "head_path":       str(head_path),
         "full_model_path": str(full_path),
@@ -255,6 +259,10 @@ def fine_tune_model(
 
     run_dir = Path(model_path).parent
     ft_path = run_dir / "fine_tuned.keras"
+
+    ft_class_names = list(getattr(train_ds, "class_names", []) or [])
+    if ft_class_names:
+        (run_dir / "class_names.json").write_text(json.dumps(ft_class_names))
 
     keras_hist = model.fit(
         train_ds,
