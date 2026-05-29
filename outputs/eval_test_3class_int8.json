@@ -1,0 +1,72 @@
+{
+  "model": "models/trained_3class/run_20260529_034203/fine_tuned_int8.tflite",
+  "test_dir": "data/splits_3class/test",
+  "test_images": 334,
+  "accuracy": 0.8502994011976048,
+  "confusion_matrix": [
+    [
+      103,
+      4,
+      7
+    ],
+    [
+      21,
+      80,
+      9
+    ],
+    [
+      9,
+      0,
+      101
+    ]
+  ],
+  "class_names": [
+    "Tomato___Early_blight",
+    "Tomato___Late_blight",
+    "Tomato___healthy"
+  ],
+  "report": {
+    "Tomato___Early_blight": {
+      "precision": 0.7744360902255639,
+      "recall": 0.9035087719298246,
+      "f1-score": 0.8340080971659919,
+      "support": 114.0
+    },
+    "Tomato___Late_blight": {
+      "precision": 0.9523809523809523,
+      "recall": 0.7272727272727273,
+      "f1-score": 0.8247422680412371,
+      "support": 110.0
+    },
+    "Tomato___healthy": {
+      "precision": 0.8632478632478633,
+      "recall": 0.9181818181818182,
+      "f1-score": 0.8898678414096917,
+      "support": 110.0
+    },
+    "accuracy": 0.8502994011976048,
+    "macro avg": {
+      "precision": 0.8633549686181264,
+      "recall": 0.8496544391281233,
+      "f1-score": 0.8495394022056401,
+      "support": 334.0
+    },
+    "weighted avg": {
+      "precision": 0.8622900718709101,
+      "recall": 0.8502994011976048,
+      "f1-score": 0.8493533985524708,
+      "support": 334.0
+    }
+  },
+  "size_mb": 1.3290939331054688,
+  "latency_ms": {
+    "mean": 5.9713469459462,
+    "median": 5.938485999649856,
+    "p95": 6.169626200426136,
+    "p99": 6.333706399309449,
+    "min": 5.858877000719076,
+    "max": 6.574522001756122,
+    "std": 0.10398642797582042,
+    "n": 333
+  }
+}
