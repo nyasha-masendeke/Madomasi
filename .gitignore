@@ -20,6 +20,7 @@ data/raw/
 data/splits/
 data/features/*.npy
 data/features_3class/
+data/splits_3class/
 
 # Outputs
 outputs/*.html

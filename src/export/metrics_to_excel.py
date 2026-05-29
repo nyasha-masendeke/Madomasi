@@ -63,30 +63,38 @@ def _merge_resources(history_path: Path, df: pd.DataFrame) -> pd.DataFrame:
     return df.merge(res_df, on="epoch", how="left")
 
 
-def _latest_training_dir() -> Path | None:
-    """Return outputs/Training<N> with the highest N, or None if none exist."""
+def _training_dirs_sorted() -> list[Path]:
+    """All outputs/Training<N> dirs, newest first."""
     runs = [p for p in OUTPUTS_DIR.glob("Training*") if p.is_dir() and p.name[8:].isdigit()]
-    if not runs:
-        return None
-    return max(runs, key=lambda p: int(p.name[8:]))
+    return sorted(runs, key=lambda p: int(p.name[8:]), reverse=True)
+
+
+def _latest_history_for(stage_files: tuple[str, ...]) -> Path | None:
+    """Walk Training<N> dirs newest-first; return the first matching filename present."""
+    for run in _training_dirs_sorted():
+        for name in stage_files:
+            path = run / name
+            if path.exists():
+                return path
+    return None
 
 
 def collect() -> list[tuple[str, str, Path, pd.DataFrame]]:
-    """Return (run_name, stage_label, source_path, df) for the head history of the latest run only."""
+    """Return one row per stage (head, finetune) using the most recent history file for each."""
+    wanted = {
+        "head":     ("history_head.json", "history_train_head.json", "history_head_full.json"),
+        "finetune": ("history_finetune.json", "history_fine-tuning.json"),
+    }
     rows: list[tuple[str, str, Path, pd.DataFrame]] = []
-    latest = _latest_training_dir()
-    if latest is None:
-        return rows
-    # Prefer history_head.json; fall back to the legacy aliases if absent
-    for name in ("history_head.json", "history_train_head.json", "history_head_full.json"):
-        path = latest / name
-        if path.exists():
-            df = _load_history(path)
-            if df is None or df.empty:
-                continue
-            df = _merge_resources(path, df)
-            rows.append((latest.name, _stage_from_filename(path.name), path, df))
-            break
+    for _, names in wanted.items():
+        path = _latest_history_for(names)
+        if path is None:
+            continue
+        df = _load_history(path)
+        if df is None or df.empty:
+            continue
+        df = _merge_resources(path, df)
+        rows.append((path.parent.name, _stage_from_filename(path.name), path, df))
     return rows
 
 
